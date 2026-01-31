@@ -67,4 +67,6 @@ jobs:
 # To block PR merge until this check has run:
 #   Repo → Settings → Branches → Branch protection rule for main
 #   → Require status checks to pass → Add "ai-review"
-# Merge is then allowed only after the workflow completes (success = no failure in analyze step).
+#
+# To let the AI apply refactors (with human approval): comment /ai-apply-refactor on the PR.
+# See .github/REFACTOR-APPROVAL.md for environment setup (refactor-approval).
