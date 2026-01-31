@@ -1,0 +1,9 @@
+{
+  "layers": {
+    "core": {
+      "checks": [
+        "semantic-duplication"
+      ]
+    }
+  }
+}

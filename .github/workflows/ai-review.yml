@@ -1,0 +1,47 @@
+name: AI Semantic Review
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'modern-app/api/**'
+
+jobs:
+  semantic-duplicate-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get diff vs main
+        run: |
+          git fetch origin main 2>/dev/null || true
+          git diff origin/main...HEAD -- "modern-app/api/**" > pr.diff || true
+          echo "PR_DIFF_FILE=${{ github.workspace }}/pr.diff" >> $GITHUB_ENV
+
+      - name: Extract C# from main branch
+        run: |
+          touch main_code.cs
+          for f in $(git ls-tree -r origin/main --name-only 2>/dev/null | grep '\.cs$' | grep 'modern-app/api/'); do
+            git show "origin/main:$f" 2>/dev/null >> main_code.cs || true
+          done
+          echo "MAIN_CODE_FILE=${{ github.workspace }}/main_code.cs" >> $GITHUB_ENV
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install ai-reviewer dependencies
+        working-directory: ai-reviewer
+        run: npm ci || npm install
+
+      - name: Run semantic duplicate analysis
+        working-directory: ai-reviewer
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PR_DIFF_FILE: ${{ env.PR_DIFF_FILE }}
+          MAIN_CODE_FILE: ${{ env.MAIN_CODE_FILE }}
+        run: node analyze.js
