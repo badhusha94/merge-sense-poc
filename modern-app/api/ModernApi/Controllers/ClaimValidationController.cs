@@ -17,14 +17,24 @@ public class ClaimValidationController : ControllerBase
     [HttpGet("age")]
     public IActionResult ValidateAge([FromQuery] int age)
     {
-        var valid = _claimValidationService.IsValidAge(age);
+        var valid = age >= 18 && _claimValidationService.IsValidAge(age);
         return Ok(new { age, valid });
     }
 
     [HttpGet("amount")]
     public IActionResult ValidateAmount([FromQuery] decimal amount)
     {
-        var valid = _claimValidationService.IsValidAmount(amount);
-        return Ok(new { amount, valid });
+        return Validate(amount, _claimValidationService.IsValidAmount);
+    }
+
+    private IActionResult OkResponse<T>(T value, bool valid)
+    {
+        return Ok(new { value, valid });
+    }
+
+    private IActionResult Validate<T>(T value, Func<T, bool> validateFunc)
+    {
+        var valid = validateFunc(value);
+        return OkResponse(value, valid);
     }
 }

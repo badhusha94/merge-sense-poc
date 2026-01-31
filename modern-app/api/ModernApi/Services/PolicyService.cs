@@ -23,4 +23,9 @@ public class PolicyService
     {
         return amount > 0;
     }
+
+    public decimal ApplyDiscount(decimal amount)
+    {
+        return ApplyPolicyDiscount(amount);
+    }
 }
