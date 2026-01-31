@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "c:\\Users\\badbe\\OneDrive\\Documents\\projects\\MergeSense\\ai-migration-poc\\modern-app\\api\\ModernApi\\ModernApi.csproj": {}
+    "C:\\Users\\badbe\\OneDrive\\Documents\\projects\\MergeSense\\ai-migration-poc\\modern-app\\api\\ModernApi\\ModernApi.csproj": {}
   },
   "projects": {
-    "c:\\Users\\badbe\\OneDrive\\Documents\\projects\\MergeSense\\ai-migration-poc\\modern-app\\api\\ModernApi\\ModernApi.csproj": {
+    "C:\\Users\\badbe\\OneDrive\\Documents\\projects\\MergeSense\\ai-migration-poc\\modern-app\\api\\ModernApi\\ModernApi.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "c:\\Users\\badbe\\OneDrive\\Documents\\projects\\MergeSense\\ai-migration-poc\\modern-app\\api\\ModernApi\\ModernApi.csproj",
+        "projectUniqueName": "C:\\Users\\badbe\\OneDrive\\Documents\\projects\\MergeSense\\ai-migration-poc\\modern-app\\api\\ModernApi\\ModernApi.csproj",
         "projectName": "ModernApi",
-        "projectPath": "c:\\Users\\badbe\\OneDrive\\Documents\\projects\\MergeSense\\ai-migration-poc\\modern-app\\api\\ModernApi\\ModernApi.csproj",
+        "projectPath": "C:\\Users\\badbe\\OneDrive\\Documents\\projects\\MergeSense\\ai-migration-poc\\modern-app\\api\\ModernApi\\ModernApi.csproj",
         "packagesPath": "C:\\Users\\badbe\\.nuget\\packages\\",
-        "outputPath": "c:\\Users\\badbe\\OneDrive\\Documents\\projects\\MergeSense\\ai-migration-poc\\modern-app\\api\\ModernApi\\obj\\",
+        "outputPath": "C:\\Users\\badbe\\OneDrive\\Documents\\projects\\MergeSense\\ai-migration-poc\\modern-app\\api\\ModernApi\\obj\\",
         "projectStyle": "PackageReference",
         "fallbackFolders": [
           "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
