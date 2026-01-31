@@ -177,6 +177,7 @@ async function runSemanticDuplication(prMethods, mainMethods, findings) {
               method: prMethod.name,
               matchingMethod: mainMethod.name,
               similarityScore: Math.round(similarity * 100) / 100,
+              thresholdUsed: SIMILARITY_THRESHOLD,
               aiExplanation: explanation,
               suggestedAction,
               cursorPrompt,
