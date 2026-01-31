@@ -1,0 +1,9 @@
+{
+  "description": "Placeholder for test impact analysis. Future: map code areas to features, features to test suites, AI-based selective test execution.",
+  "codeAreasToFeatures": {},
+  "featuresToTestSuites": {},
+  "selectiveTestExecution": {
+    "enabled": false,
+    "notes": "Future: AI-driven selection of test suites based on changed code areas."
+  }
+}

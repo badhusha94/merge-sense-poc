@@ -5,9 +5,11 @@ on:
     branches: [main]
     paths:
       - 'modern-app/api/**'
+      - 'ai-reviewer/**'
+      - '.ai/**'
 
 jobs:
-  semantic-duplicate-check:
+  ai-review:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
@@ -38,10 +40,24 @@ jobs:
         working-directory: ai-reviewer
         run: npm ci || npm install
 
-      - name: Run semantic duplicate analysis
+      - name: Run AI review analysis
+        id: analyze
         working-directory: ai-reviewer
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_WORKSPACE: ${{ github.workspace }}
           PR_DIFF_FILE: ${{ env.PR_DIFF_FILE }}
           MAIN_CODE_FILE: ${{ env.MAIN_CODE_FILE }}
+          FINDINGS_OUTPUT: ${{ github.workspace }}/findings.json
         run: node analyze.js
+
+      - name: Post AI findings as PR comments
+        if: success()
+        working-directory: ai-reviewer
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          FINDINGS_OUTPUT: ${{ github.workspace }}/findings.json
+        run: node post-pr-comments.js
+        continue-on-error: true

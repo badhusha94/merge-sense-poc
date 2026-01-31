@@ -1,0 +1,1 @@
+Identify repeated computations or lookups in this code that could benefit from caching.

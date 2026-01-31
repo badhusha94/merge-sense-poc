@@ -2,8 +2,40 @@
   "layers": {
     "core": {
       "checks": [
-        "semantic-duplication"
+        "semantic-duplication",
+        "logic-safety"
       ]
+    },
+    "quality": {
+      "checks": [
+        "modernization",
+        "readability"
+      ],
+      "placeholder": true
+    },
+    "performance": {
+      "checks": [
+        "async-enforcement",
+        "linq-optimization"
+      ],
+      "placeholder": true
+    }
+  },
+  "ruleDefinitions": {
+    "no-business-logic-in-controllers": {
+      "layer": "architecture",
+      "enabled": false,
+      "promptTemplate": "prompts/no-business-logic-in-controllers.txt"
+    },
+    "async-enforcement": {
+      "layer": "performance",
+      "enabled": false,
+      "promptTemplate": "prompts/async-enforcement.txt"
+    },
+    "caching-opportunities": {
+      "layer": "performance",
+      "enabled": false,
+      "promptTemplate": "prompts/caching-opportunities.txt"
     }
   }
 }

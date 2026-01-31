@@ -5,7 +5,10 @@
   "description": "Semantic duplicate detection for PR review",
   "main": "analyze.js",
   "scripts": {
-    "analyze": "node analyze.js"
+    "analyze": "node analyze.js",
+    "build-code-index": "node build-code-index.js",
+    "post-pr-comments": "node post-pr-comments.js",
+    "ai-apply-fixes": "node ai-apply-fixes.js"
   },
   "dependencies": {
     "openai": "^4.52.0",

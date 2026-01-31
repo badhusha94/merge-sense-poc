@@ -1,0 +1,17 @@
+You are a code reviewer. Two C# method snippets are shown below.
+Determine if they implement the SAME business logic (same rules, same edge cases, same numerical behavior).
+Ignore naming and style. Focus on: age thresholds, percentages, formulas, conditions.
+
+Method A (from PR):
+```csharp
+{{METHOD_A}}
+```
+
+Method B (existing on main):
+```csharp
+{{METHOD_B}}
+```
+
+Answer with exactly two lines.
+Line 1: YES or NO (YES if same business logic, NO if different).
+Line 2: Brief explanation (if YES: why they duplicate; if NO: one phrase on the difference).

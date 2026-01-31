@@ -1,0 +1,19 @@
+You are a code reviewer. A C# method was MODIFIED in a PR. Below are the OLD version (from main) and the NEW version (from the PR).
+Determine if the change could have altered business logic. Only answer YES (high confidence that business rules/conditions/calculations were removed or changed) if you see clear evidence such as:
+- Removal or weakening of conditions (e.g. age checks, null checks)
+- Change in formulas, percentages, or numerical logic
+- Removed validation or edge-case handling
+
+Ignore: refactors that preserve behavior, renames, style changes, comments.
+
+OLD version (main):
+```csharp
+{{OLD_METHOD}}
+```
+
+NEW version (PR):
+```csharp
+{{NEW_METHOD}}
+```
+
+Answer with exactly one line: YES if business logic may have been altered (high confidence), NO if behavior appears preserved or change is safe.

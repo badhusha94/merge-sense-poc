@@ -5,17 +5,22 @@ namespace LegacyApp
 {
     public partial class PremiumPage
     {
+        // Redundant constants - same values in BillingModule, QuotePage, ClaimsPage
+        private const decimal TaxRate = 0.05m;
+        private const int AgeLoadingThreshold = 60;
+        private const decimal LoadingPercent = 0.20m;
+
         /// <summary>
         /// Calculates premium with age loading and tax.
         /// </summary>
         public decimal CalculatePremium(int age, decimal baseAmount)
         {
             decimal amount = baseAmount;
-            if (age > 60)
+            if (age > AgeLoadingThreshold)
             {
-                amount += baseAmount * 0.20m; // 20% loading
+                amount += baseAmount * LoadingPercent;
             }
-            amount += amount * 0.05m; // 5% tax
+            amount += amount * TaxRate;
             return amount;
         }
 

@@ -1,0 +1,2 @@
+Identify if this controller method contains business logic that should be in a service layer.
+Focus on: calculations, conditionals, data transformation beyond simple mapping.
