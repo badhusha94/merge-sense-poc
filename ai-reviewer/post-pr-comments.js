@@ -94,14 +94,16 @@ function formatCommentBody(f) {
       `🧠 **Semantic duplicate** (similarity ${f.similarityScore ?? '—'}, threshold **${threshold}**)\n` +
       `Duplicates logic from \`${f.matchingMethod}\`. ${(f.aiExplanation || f.description || '').slice(0, 120)}…\n\n` +
       `**Action:** Reuse \`${f.matchingMethod}\` or extract shared logic.\n` +
-      `**Cursor:** \`${f.cursorPrompt || 'Refactor to reuse existing logic.'}\``
+      `**Cursor:** \`${f.cursorPrompt || 'Refactor to reuse existing logic.'}\`\n\n` +
+      `_Comment \`/ai-apply-refactor\` on this PR to have the AI apply fixes (requires your approval)._`
     );
   }
   if (f.type === 'logic-safety') {
     return (
       `🧠 **Logic safety** — ${(f.aiExplanation || f.description || '').slice(0, 120)}…\n\n` +
       `**Action:** Restore or align business rules/conditions/calculations.\n` +
-      `**Cursor:** \`${f.cursorPrompt || 'Restore original business logic.'}\``
+      `**Cursor:** \`${f.cursorPrompt || 'Restore original business logic.'}\`\n\n` +
+      `_Comment \`/ai-apply-refactor\` on this PR to have the AI apply fixes (requires your approval)._`
     );
   }
   return `🧠 **${f.title || f.type}** — ${(f.description || '').slice(0, 150)}`;
@@ -175,7 +177,9 @@ async function main() {
     }
     posted++;
   }
-  console.log(`Posted ${posted} comment(s) (deduplicated).`);
+  const summary = `_To have the AI apply these fixes (with your approval), comment \`/ai-apply-refactor\` on this PR. A human must approve before code is changed._`;
+  await postIssueComment(summary);
+  console.log(`Posted ${posted} comment(s) + refactor option.`);
 }
 
 main().catch((err) => {

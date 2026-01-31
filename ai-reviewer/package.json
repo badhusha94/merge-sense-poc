@@ -8,6 +8,7 @@
     "analyze": "node analyze.js",
     "build-code-index": "node build-code-index.js",
     "post-pr-comments": "node post-pr-comments.js",
+    "apply-refactor": "node apply-refactor.js",
     "ai-apply-fixes": "node ai-apply-fixes.js"
   },
   "dependencies": {
