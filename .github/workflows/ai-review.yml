@@ -58,6 +58,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_DIFF_FILE: ${{ env.PR_DIFF_FILE }}
           FINDINGS_OUTPUT: ${{ github.workspace }}/findings.json
         run: node post-pr-comments.js
         continue-on-error: true
+
+# To block PR merge until this check has run:
+#   Repo → Settings → Branches → Branch protection rule for main
+#   → Require status checks to pass → Add "ai-review"
+# Merge is then allowed only after the workflow completes (success = no failure in analyze step).
