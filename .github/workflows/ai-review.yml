@@ -3,10 +3,12 @@ name: AI Semantic Review
 on:
   pull_request:
     branches: [main]
-    paths:
-      - 'modern-app/api/**'
-      - 'ai-reviewer/**'
-      - '.ai/**'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
 
 jobs:
   ai-review:
@@ -17,13 +19,30 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Determine whether review should run (cheap path filter)
+        id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main 2>/dev/null || true
+          # Only pay the OpenAI cost when API code changed; still succeed either way so required checks don't hang.
+          CHANGED=$(git diff --name-only origin/main...HEAD -- "modern-app/api/**" | wc -l | tr -d ' ')
+          if [ "${CHANGED}" = "0" ]; then
+            echo "run_review=false" >> "$GITHUB_OUTPUT"
+            echo "No changes under modern-app/api/**; skipping AI review."
+          else
+            echo "run_review=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Get diff vs main
+        if: steps.filter.outputs.run_review == 'true'
         run: |
           git fetch origin main 2>/dev/null || true
           git diff origin/main...HEAD -- "modern-app/api/**" > pr.diff || true
           echo "PR_DIFF_FILE=${{ github.workspace }}/pr.diff" >> $GITHUB_ENV
 
       - name: Extract C# from main branch
+        if: steps.filter.outputs.run_review == 'true'
         run: |
           touch main_code.cs
           for f in $(git ls-tree -r origin/main --name-only 2>/dev/null | grep '\.cs$' | grep 'modern-app/api/'); do
@@ -32,16 +51,19 @@ jobs:
           echo "MAIN_CODE_FILE=${{ github.workspace }}/main_code.cs" >> $GITHUB_ENV
 
       - name: Install Node
+        if: steps.filter.outputs.run_review == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Install ai-reviewer dependencies
+        if: steps.filter.outputs.run_review == 'true'
         working-directory: ai-reviewer
         run: npm ci || npm install
 
       - name: Run AI review analysis
         id: analyze
+        if: steps.filter.outputs.run_review == 'true'
         working-directory: ai-reviewer
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -51,14 +73,34 @@ jobs:
           FINDINGS_OUTPUT: ${{ github.workspace }}/findings.json
         run: node analyze.js
 
+      - name: Resolve PR number for non-PR events (workflow_dispatch)
+        id: pr
+        if: steps.filter.outputs.run_review == 'true' && github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Find PR(s) associated with this commit SHA
+          PRS_JSON=$(curl -sS \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/commits/${{ github.sha }}/pulls")
+          PR_NUMBER=$(echo "$PRS_JSON" | jq -r '.[0].number // empty')
+          if [ -z "${PR_NUMBER}" ]; then
+            echo "pr_number=" >> "$GITHUB_OUTPUT"
+            echo "No PR found for SHA ${{ github.sha }}; will skip PR commenting."
+          else
+            echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "Resolved PR #${PR_NUMBER} for SHA ${{ github.sha }}"
+          fi
+
       - name: Post AI findings as PR comments
-        if: success()
+        if: success() && steps.filter.outputs.run_review == 'true' && (github.event_name == 'pull_request' || steps.pr.outputs.pr_number != '')
         working-directory: ai-reviewer
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || steps.pr.outputs.pr_number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           PR_DIFF_FILE: ${{ env.PR_DIFF_FILE }}
           FINDINGS_OUTPUT: ${{ github.workspace }}/findings.json
         run: node post-pr-comments.js
