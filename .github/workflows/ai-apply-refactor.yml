@@ -42,12 +42,11 @@ jobs:
           ref: ${{ needs.detect.outputs.head_ref }}
           fetch-depth: 0
 
-      - name: Ensure apply-refactor script exists (use main if missing)
+      - name: Ensure apply-refactor script is up to date (prefer main)
         run: |
-          if [ ! -f ai-reviewer/apply-refactor.js ]; then
-            git fetch origin main 2>/dev/null || true
-            git show origin/main:ai-reviewer/apply-refactor.js > ai-reviewer/apply-refactor.js 2>/dev/null || true
-          fi
+          git fetch origin main 2>/dev/null || true
+          # Always prefer main's workflow/script fixes (PR branches often don't include AI tooling changes).
+          git show origin/main:ai-reviewer/apply-refactor.js > ai-reviewer/apply-refactor.js 2>/dev/null || true
           test -f ai-reviewer/apply-refactor.js || (echo "apply-refactor.js not found on this branch or main" && exit 1)
 
       - name: Configure git for push
