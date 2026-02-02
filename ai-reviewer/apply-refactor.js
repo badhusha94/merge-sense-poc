@@ -101,7 +101,13 @@ async function postComment(body) {
     },
     body: JSON.stringify({ body }),
   });
-  if (!res.ok) throw new Error(`Comment API ${res.status}: ${await res.text()}`);
+  if (!res.ok) {
+    const text = await res.text();
+    // Common in locked-down org settings or integration-restricted tokens.
+    // Refactors were already pushed; don't fail the whole workflow just because commenting is forbidden.
+    console.warn(`Warning: PR comment failed (${res.status}). Continuing. Response: ${text}`);
+    return;
+  }
 }
 
 async function main() {
@@ -167,7 +173,11 @@ async function main() {
   const comment =
     `✅ **AI refactor applied** (commit \`${sha.slice(0, 7)}\`, ${applied} change(s)).\n\n` +
     `Checks will re-run on this PR. **Please test locally and run your tests before merging.**`;
-  await postComment(comment);
+  try {
+    await postComment(comment);
+  } catch (e) {
+    console.warn(`Warning: failed to post PR comment. Continuing. ${e?.message || e}`);
+  }
   console.log('Pushed and posted comment.');
 }
 
