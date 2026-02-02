@@ -8,6 +8,17 @@ public class ClaimValidationService
     private const int MinimumAge = 18;
     private const int MaximumAge = 100;
 
+    // Compatibility aliases for controller naming (older code expected these method names).
+    public bool IsAgeValid(int age)
+    {
+        return IsValidAge(age);
+    }
+
+    public bool IsAmountValid(decimal amount)
+    {
+        return IsValidAmount(amount);
+    }
+
     public bool IsValidAge(int age)
     {
         return age >= MinimumAge && age <= MaximumAge;

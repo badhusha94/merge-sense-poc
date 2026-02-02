@@ -6,6 +6,7 @@ builder.Services.AddScoped<ModernApi.Services.DiscountService>();
 builder.Services.AddScoped<ModernApi.Services.ValidationService>();
 builder.Services.AddScoped<ModernApi.Services.RenewalService>();
 builder.Services.AddScoped<ModernApi.Services.QuoteService>();
+builder.Services.AddScoped<ModernApi.Services.LegacyQuotePageService>();
 builder.Services.AddScoped<ModernApi.Services.ClaimsService>();
 builder.Services.AddScoped<ModernApi.Services.PolicyService>();
 builder.Services.AddScoped<ModernApi.Services.RenewalDiscountService>();
