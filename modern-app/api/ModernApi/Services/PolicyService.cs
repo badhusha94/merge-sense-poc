@@ -10,7 +10,7 @@ public class PolicyService
 
     public decimal ApplyPolicyDiscount(decimal amount)
     {
-        if (amount <= PolicyDiscountThreshold) return amount;
+        if (amount < PolicyDiscountThreshold) return amount; // Adjusted to < for original behavior
         return amount * (1m - PolicyDiscountRate);
     }
 

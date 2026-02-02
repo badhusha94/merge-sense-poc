@@ -17,14 +17,21 @@ public class ClaimValidationController : ControllerBase
     [HttpGet("age")]
     public IActionResult ValidateAge([FromQuery] int age)
     {
-        var valid = age >= 18 && _claimValidationService.IsValidAge(age);
-        return Ok(new { age, valid });
+        if (age < 0 || age > 120)
+        {
+            return BadRequest("Age must be between 0 and 120.");
+        }
+        return Validate(age, _claimValidationService.IsAgeValid);
     }
 
     [HttpGet("amount")]
     public IActionResult ValidateAmount([FromQuery] decimal amount)
     {
-        return Validate(amount, _claimValidationService.IsValidAmount);
+        if (amount < 0)
+        {
+            return BadRequest("Amount must be a positive value.");
+        }
+        return Validate(amount, _claimValidationService.IsAmountValid);
     }
 
     private IActionResult OkResponse<T>(T value, bool valid)

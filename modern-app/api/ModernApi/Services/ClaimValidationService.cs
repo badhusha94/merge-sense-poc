@@ -18,11 +18,6 @@ public class ClaimValidationService
         return amount > 0;
     }
 
-    public bool IsValidAgeUsingExistingLogic(int age)
-    {
-        return IsValidAge(age);
-    }
-
     public bool IsValidAmountUsingExistingLogic(decimal amount)
     {
         return IsValidAmount(amount);
