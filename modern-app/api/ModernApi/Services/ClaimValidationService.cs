@@ -22,4 +22,14 @@ public class ClaimValidationService
     {
         return IsValidAmount(amount);
     }
+
+    public bool ValidateAmount(decimal amount)
+    {
+        return IsValidAmount(amount);
+    }
+
+    public bool ValidateAge(int age)
+    {
+        return IsValidAge(age);
+    }
 }

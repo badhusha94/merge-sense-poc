@@ -44,4 +44,21 @@ public class ClaimValidationController : ControllerBase
         var valid = validateFunc(value);
         return OkResponse(value, valid);
     }
+
+    private IActionResult ValidateAgeAndAmount(Func<int, bool> ageValidationFunc, Func<decimal, bool> amountValidationFunc, int age, decimal amount)
+    {
+        if (age < 0 || age > 120)
+        {
+            return BadRequest("Age must be between 0 and 120.");
+        }
+        if (amount < 0)
+        {
+            return BadRequest("Amount must be a positive value.");
+        }
+
+        var ageValid = _claimValidationService.IsAgeValid(age);
+        var amountValid = _claimValidationService.IsAmountValid(amount);
+
+        return OkResponse(new { age, amount }, ageValid && amountValid);
+    }
 }
