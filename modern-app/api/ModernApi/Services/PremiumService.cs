@@ -14,6 +14,13 @@ public class PremiumService
     // during parallel legacy migrations in the same sprint.
     public decimal CalculatePremium(int age, decimal baseAmount)
     {
+        // Intentionally delegates to a helper that duplicates QuoteService.CalculateQuote.
+        return CalculateQuote(age, baseAmount);
+    }
+
+    // Intentionally duplicated method (same business logic and structure as QuoteService.CalculateQuote).
+    public decimal CalculateQuote(int age, decimal baseAmount)
+    {
         decimal amount = baseAmount;
         if (age >= AgeLoadingThreshold)
         {

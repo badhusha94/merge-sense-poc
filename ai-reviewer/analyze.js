@@ -13,8 +13,10 @@ import cosineSimilarity from 'cosine-similarity';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Reliability-first: higher threshold reduces false-positive duplicate comments.
+// Reliability-first: keep a high similarity bar for "strong" matches, but don't rely solely on it.
+// We still confirm duplicates with the LLM prompt before emitting a finding.
 const SIMILARITY_THRESHOLD = 0.92;
+const MIN_CANDIDATE_SIMILARITY = 0.80;
 const EMBEDDING_MODEL = 'text-embedding-3-small';
 const CHAT_MODEL = 'gpt-4o-mini';
 
@@ -221,11 +223,14 @@ async function runSemanticDuplication(prMethods, mainMethods, findings) {
       }
       const similarity = cosineSimilarity(prEmbedding, mainEmbedding);
 
-      if (similarity < SIMILARITY_THRESHOLD) continue;
       if (!best || similarity > best.similarity) best = { mainMethod, similarity };
     }
 
     if (!best) continue;
+    if (best.similarity < MIN_CANDIDATE_SIMILARITY) {
+      console.log(`Skip: best similarity below min (${prMethod.name} best=${best.similarity.toFixed(2)})`);
+      continue;
+    }
 
     const { same, explanation } = await confirmSameBusinessLogicWithExplanation(prMethod.text, best.mainMethod.text);
     if (!same) continue;
@@ -243,7 +248,8 @@ async function runSemanticDuplication(prMethods, mainMethods, findings) {
         method: prMethod.name,
         matchingMethod: best.mainMethod.name,
         similarityScore: Math.round(best.similarity * 100) / 100,
-        thresholdUsed: SIMILARITY_THRESHOLD,
+        thresholdUsed: MIN_CANDIDATE_SIMILARITY,
+        highConfidenceThreshold: SIMILARITY_THRESHOLD,
         aiExplanation: explanation,
         suggestedAction,
         cursorPrompt,
