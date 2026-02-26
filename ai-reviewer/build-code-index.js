@@ -26,7 +26,8 @@ const openai = new OpenAI({ apiKey });
 
 function extractCSharpMethods(source, filePath = '') {
   const methods = [];
-  const methodRegex = /(?:public|private|protected|internal)?\s*(?:static\s+)?(?:async\s+)?(\w+(?:<[^>]+>)?)\s+(\w+)\s*\([^)]*\)[^{]*\{/g;
+  // Require an access modifier to avoid false positives (e.g. framework call sites).
+  const methodRegex = /\b(public|private|protected|internal)\s+(?:static\s+)?(?:async\s+)?([\w<>\[\], ?]+)\s+(\w+)\s*\([^)]*\)\s*(?:where[^{]+)?\s*\{/g;
   let match;
   while ((match = methodRegex.exec(source)) !== null) {
     const start = match.index;
@@ -41,7 +42,7 @@ function extractCSharpMethods(source, filePath = '') {
     }
     const end = i;
     const methodText = source.slice(start, end).trim();
-    const name = match[2];
+    const name = match[3];
     methods.push({ file: filePath, name, text: methodText });
   }
   return methods;
