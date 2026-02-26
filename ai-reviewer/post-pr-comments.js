@@ -16,6 +16,8 @@ const token = process.env.GITHUB_TOKEN;
 const repo = process.env.GITHUB_REPOSITORY;
 let prNumber = process.env.PR_NUMBER;
 const ref = process.env.GITHUB_REF;
+const APPLY_REFACTOR_HINT_MARKER = '<!-- ai-apply-refactor-hint -->';
+const FINDING_MARKER_PREFIX = '<!-- ai-finding-key:';
 
 if (!token || !repo) {
   console.error('GITHUB_TOKEN and GITHUB_REPOSITORY are required.');
@@ -46,11 +48,46 @@ if (!Array.isArray(findings) || findings.length === 0) {
 function dedupe(findings) {
   const seen = new Set();
   return findings.filter((f) => {
-    const key = `${f.type}|${f.method || ''}|${f.matchingMethod || ''}`;
+    // Reliability: project-rule findings often have no method name, so dedupe on full finding identity.
+    const key = findingKey(f);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+}
+
+function normalizeRepoPath(p) {
+  return String(p || '').replace(/\\/g, '/').replace(/^\.?\//, '');
+}
+
+function findingKey(f) {
+  const type = String(f?.type || '');
+  const title = String(f?.title || '');
+  const file = normalizeRepoPath(f?.file || '');
+  const line = typeof f?.line === 'number' ? String(f.line) : '';
+  const method = String(f?.method || '');
+  const matching = String(f?.matchingMethod || '');
+  return `${type}|${title}|${file}|${line}|${method}|${matching}`;
+}
+
+function markerForFinding(f) {
+  return `${FINDING_MARKER_PREFIX} ${findingKey(f)} -->`;
+}
+
+async function listReviewComments() {
+  const res = await fetch(`${apiBase}/pulls/${prNumber}/comments?per_page=100`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`Review comments API ${res.status}: ${t}`);
+  }
+  return await res.json();
 }
 
 /** Parse diff to build method name -> [{ path, line }]. Only added lines; line is in new file. */
@@ -111,26 +148,84 @@ function methodLocationsFromDiff(diffContent) {
 
 /** Short comment body; include threshold for semantic-duplication. */
 function formatCommentBody(f) {
-  const threshold = f.thresholdUsed != null ? f.thresholdUsed : 0.88;
+  const similarityPct = typeof f.similarityPercent === 'number'
+    ? f.similarityPercent
+    : (typeof f.similarityScore === 'number' ? Math.round(f.similarityScore * 100) : null);
+  const thresholdPct = typeof f.thresholdPercent === 'number'
+    ? f.thresholdPercent
+    : (f.thresholdUsed != null ? Math.round(Number(f.thresholdUsed) * 100) : null);
+
   if (f.type === 'semantic-duplication' && f.matchingMethod) {
     return (
-      `**Semantic duplicate** (similarity ${f.similarityScore ?? '—'}, threshold **${threshold}**)\n` +
+      `**Semantic duplicate** (similarity ${similarityPct != null ? `${similarityPct}%` : '—'}, threshold **${thresholdPct != null ? `${thresholdPct}%` : '—'}**)\n` +
       `Duplicates logic from \`${f.matchingMethod}\`. ${(f.aiExplanation || f.description || '').slice(0, 120)}…\n\n` +
       `**Action:** Reuse \`${f.matchingMethod}\` or extract shared logic.\n` +
       `**Cursor prompt:** \`${f.cursorPrompt || 'Refactor to reuse existing logic.'}\``
     );
   }
-  if (f.type === 'logic-safety') {
-    return (
-      `**Logic safety** — ${(f.aiExplanation || f.description || '').slice(0, 120)}…\n\n` +
-      `**Action:** Restore or align business rules/conditions/calculations.\n` +
-      `**Cursor prompt:** \`${f.cursorPrompt || 'Restore original business logic.'}\``
-    );
-  }
-  return `**${f.title || f.type}** — ${(f.description || '').slice(0, 150)}`;
+  const title = f.title || f.type || 'Finding';
+  const desc = (f.description || f.aiExplanation || '').trim();
+  const action = (f.suggestedAction || '').trim();
+  const cursor = (f.cursorPrompt || '').trim();
+
+  let body = `**${title}**\n`;
+  if (desc) body += `${desc}\n`;
+  if (action) body += `\n**Action:** ${action}\n`;
+  if (cursor) body += `**Cursor prompt:** \`${cursor}\`\n`;
+  return body.trim();
 }
 
 const apiBase = `https://api.github.com/repos/${repo}`;
+
+async function listIssueComments() {
+  const res = await fetch(`${apiBase}/issues/${prNumber}/comments?per_page=100`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`Issue comments API ${res.status}: ${t}`);
+  }
+  return await res.json();
+}
+
+async function postIssueComment(body) {
+  const res = await fetch(`${apiBase}/issues/${prNumber}/comments`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ body }),
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`Issue comment API ${res.status}: ${t}`);
+  }
+}
+
+async function maybePostApplyRefactorHint() {
+  try {
+    const comments = await listIssueComments();
+    const already = Array.isArray(comments) && comments.some((c) => String(c?.body || '').includes(APPLY_REFACTOR_HINT_MARKER));
+    if (already) return;
+
+    const body =
+      `${APPLY_REFACTOR_HINT_MARKER}\n` +
+      `To have the AI apply safe refactors for these findings (requires approval), add a PR comment:\n\n` +
+      `\`/ai-apply-refactor\``;
+    await postIssueComment(body);
+  } catch (e) {
+    // Reliability-first: never fail the workflow because the hint couldn't be posted.
+    console.log(`Warning: failed to post apply-refactor hint. ${e?.message || e}`);
+  }
+}
 
 async function postReviewComment(body, commitId, path, line) {
   const res = await fetch(`${apiBase}/pulls/${prNumber}/comments`, {
@@ -155,23 +250,89 @@ async function postReviewComment(body, commitId, path, line) {
   }
 }
 
+function hunkRangesFromDiff(diffContent) {
+  const map = new Map();
+  if (!diffContent || typeof diffContent !== 'string') return map;
+
+  let currentPath = null;
+  for (const line of diffContent.split('\n')) {
+    if (line.startsWith('+++ b/')) {
+      currentPath = line.slice(6).trim();
+      if (currentPath && !map.has(currentPath)) map.set(currentPath, []);
+      continue;
+    }
+    if (!currentPath) continue;
+    if (!line.startsWith('@@')) continue;
+
+    const match = line.match(/\+(\d+)(?:,(\d+))?/);
+    if (!match) continue;
+    const start = Number(match[1]);
+    const count = match[2] ? Number(match[2]) : 1;
+    const end = start + Math.max(0, count - 1);
+    map.get(currentPath).push({ start, end });
+  }
+  return map;
+}
+
+function lineIsInHunks(ranges, line) {
+  if (!Array.isArray(ranges) || ranges.length === 0) return false;
+  if (!line || typeof line !== 'number') return false;
+  for (const r of ranges) {
+    if (line >= r.start && line <= r.end) return true;
+  }
+  return false;
+}
+
 async function main() {
   findings = dedupe(findings);
+  const existingKeys = new Set();
+  try {
+    const existing = await listReviewComments();
+    for (const c of Array.isArray(existing) ? existing : []) {
+      const body = String(c?.body || '');
+      if (!body.includes(FINDING_MARKER_PREFIX)) continue;
+      const match = body.match(/<!-- ai-finding-key:\s*([^>]+)\s*-->/);
+      if (match && match[1]) existingKeys.add(match[1].trim());
+    }
+  } catch (e) {
+    // If we can't list comments, keep going; we'll still post anchored comments.
+    console.log(`Warning: failed to list existing review comments for dedupe. ${e?.message || e}`);
+  }
+
   let methodLocations = new Map();
+  let hunkRanges = new Map();
   if (prDiffFile && prHeadSha) {
     const diffPath = path.isAbsolute(prDiffFile) ? prDiffFile : path.resolve(process.cwd(), prDiffFile);
     if (fs.existsSync(diffPath)) {
-      methodLocations = methodLocationsFromDiff(fs.readFileSync(diffPath, 'utf8'));
+      const diff = fs.readFileSync(diffPath, 'utf8');
+      methodLocations = methodLocationsFromDiff(diff);
+      hunkRanges = hunkRangesFromDiff(diff);
     }
   }
 
   let posted = 0;
   for (const f of findings) {
-    const body = formatCommentBody(f);
+    const key = findingKey(f);
+    if (existingKeys.has(key)) {
+      console.log(`Skip (already commented): ${f.type} ${f.method || f.title || '—'}`);
+      continue;
+    }
+
+    const body = `${formatCommentBody(f)}\n\n${markerForFinding(f)}`;
     const methodName = f.method;
     const filePath = f.file || '';
     let firstLoc = null;
-    if (methodName && filePath) {
+
+    // Prefer explicit (file, line) anchors from findings.
+    if (filePath && typeof f.line === 'number') {
+      const ranges = hunkRanges.get(filePath) || [];
+      if (lineIsInHunks(ranges, f.line)) {
+        firstLoc = { path: filePath, line: f.line };
+      }
+    }
+
+    // Fallback: method-based anchoring.
+    if (!firstLoc && methodName && filePath) {
       const locs = methodLocations.get(`${filePath}::${methodName}`);
       firstLoc = locs && locs.length > 0 ? locs[0] : null;
     }
@@ -202,6 +363,9 @@ async function main() {
     }
   }
   console.log(`Posted ${posted} anchored review comment(s).`);
+
+  // UX: Post once as a single PR (issue) comment so devs discover /ai-apply-refactor.
+  await maybePostApplyRefactorHint();
 }
 
 main().catch((err) => {

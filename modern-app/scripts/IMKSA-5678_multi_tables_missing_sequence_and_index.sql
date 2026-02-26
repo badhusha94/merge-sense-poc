@@ -1,0 +1,16 @@
+-- Developer: Dev A
+
+-- Violations:
+-- - First table wrong prefix
+-- - Missing CREATE INDEX and CREATE SEQUENCE in this script for the new tables
+
+CREATE TABLE CUSTOMER_PROFILE (
+  PROFILE_ID NUMBER PRIMARY KEY,
+  CUSTOMER_ID NUMBER NOT NULL
+);
+
+CREATE TABLE TBHUB_CUSTOMER_AUDIT (
+  AUDIT_ID NUMBER PRIMARY KEY,
+  EVENT_NAME VARCHAR2(50) NOT NULL
+);
+
