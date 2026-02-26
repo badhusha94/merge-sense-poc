@@ -13,15 +13,8 @@ import cosineSimilarity from 'cosine-similarity';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-<<<<<<< migration2
-// Reliability-first: keep a high similarity bar for "strong" matches, but don't rely solely on it.
-// We still confirm duplicates with the LLM prompt before emitting a finding.
-const SIMILARITY_THRESHOLD = 0.92;
-const MIN_CANDIDATE_SIMILARITY = 0.80;
-=======
 // Project policy: any similarity >= 70% should be refactored.
 const SIMILARITY_THRESHOLD = 0.70;
->>>>>>> main
 const EMBEDDING_MODEL = 'text-embedding-3-small';
 const CHAT_MODEL = 'gpt-4o-mini';
 
@@ -834,17 +827,14 @@ async function runSemanticDuplication(prMethods, mainMethods, findings) {
     }
 
     if (!best) continue;
-    if (best.similarity < MIN_CANDIDATE_SIMILARITY) {
-      console.log(`Skip: best similarity below min (${prMethod.name} best=${best.similarity.toFixed(2)})`);
-      continue;
-    }
+    if (best.similarity < SIMILARITY_THRESHOLD) continue;
 
     const { same, explanation } = await confirmSameBusinessLogicWithExplanation(prMethod.text, best.mainMethod.text);
     if (!same) continue;
 
     const suggestedAction = 'Consider reusing the existing method or moving shared logic to a common service.';
     const cursorPrompt = `Refactor this method to reuse the existing logic from ${best.mainMethod.name} while preserving current behavior.`;
-        findings.push(finding(
+    findings.push(finding(
       'semantic-duplication',
       'high',
       'Semantic Duplicate Detected',
@@ -854,16 +844,10 @@ async function runSemanticDuplication(prMethods, mainMethods, findings) {
         line: prMethod.line || 0,
         method: prMethod.name,
         matchingMethod: best.mainMethod.name,
-<<<<<<< migration2
         similarityScore: Math.round(best.similarity * 100) / 100,
-        thresholdUsed: MIN_CANDIDATE_SIMILARITY,
-        highConfidenceThreshold: SIMILARITY_THRESHOLD,
-=======
-            similarityScore: Math.round(best.similarity * 100) / 100,
-            similarityPercent: Math.round(best.similarity * 100),
-            thresholdUsed: SIMILARITY_THRESHOLD,
-            thresholdPercent: Math.round(SIMILARITY_THRESHOLD * 100),
->>>>>>> main
+        similarityPercent: Math.round(best.similarity * 100),
+        thresholdUsed: SIMILARITY_THRESHOLD,
+        thresholdPercent: Math.round(SIMILARITY_THRESHOLD * 100),
         aiExplanation: explanation,
         suggestedAction,
         cursorPrompt,
