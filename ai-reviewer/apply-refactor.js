@@ -11,6 +11,7 @@ import { execSync } from 'child_process';
 import OpenAI from 'openai';
 
 const CHAT_MODEL = 'gpt-4o-mini';
+const ALLOWED_PREFIX = 'modern-app/api/';
 
 const repoRoot = process.env.GITHUB_WORKSPACE || path.resolve(process.cwd(), '..');
 const findingsPath = process.env.FINDINGS_OUTPUT || path.join(repoRoot, 'findings.json');
@@ -33,6 +34,15 @@ if (!prHeadRef) {
 
 const openai = new OpenAI({ apiKey });
 
+function normalizeRepoPath(p) {
+  return String(p || '').replace(/\\/g, '/').replace(/^\.?\//, '');
+}
+
+function isAllowedTargetPath(p) {
+  const s = normalizeRepoPath(p);
+  return s.startsWith(ALLOWED_PREFIX) && !s.includes('/bin/') && !s.includes('/obj/');
+}
+
 /** Parse diff to get method name -> first { path } for that method. */
 function methodPathFromDiff(diffContent) {
   const map = new Map();
@@ -54,6 +64,53 @@ function methodPathFromDiff(diffContent) {
     }
   }
   return map;
+}
+
+function findingKey(f) {
+  const type = String(f?.type || '');
+  const title = String(f?.title || '');
+  const file = normalizeRepoPath(f?.file || '');
+  const line = typeof f?.line === 'number' ? String(f.line) : '';
+  const method = String(f?.method || '');
+  const matching = String(f?.matchingMethod || '');
+  return `${type}|${title}|${file}|${line}|${method}|${matching}`;
+}
+
+const FINDING_MARKER_PREFIX = '<!-- ai-finding-key:';
+
+async function listReviewComments() {
+  if (!prNumber || !token || !repo) return [];
+  const res = await fetch(`https://api.github.com/repos/${repo}/pulls/${prNumber}/comments?per_page=100`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    console.warn(`Warning: list review comments failed (${res.status}). ${text}`);
+    return [];
+  }
+  return await res.json();
+}
+
+async function updateReviewComment(commentId, body) {
+  const res = await fetch(`https://api.github.com/repos/${repo}/pulls/comments/${commentId}`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ body }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    console.warn(`Warning: update review comment failed (${res.status}). ${text}`);
+  }
 }
 
 /** Ask AI to refactor the file for this finding; return full file content. */
@@ -137,11 +194,16 @@ async function main() {
 
   const repoRootResolved = path.isAbsolute(repoRoot) ? repoRoot : path.resolve(process.cwd(), repoRoot);
   let applied = 0;
+  const appliedFindingKeys = new Set();
 
   for (const f of findings) {
-    const filePath = f.method ? methodToPath.get(f.method) : null;
+    const filePath = f.file ? normalizeRepoPath(f.file) : (f.method ? methodToPath.get(f.method) : null);
     if (!filePath) {
       console.log(`Skipping ${f.method}: no file path from diff.`);
+      continue;
+    }
+    if (!isAllowedTargetPath(filePath)) {
+      console.log(`Skipping ${filePath}: not an allowed target path.`);
       continue;
     }
     const fullPath = path.join(repoRootResolved, filePath);
@@ -154,6 +216,7 @@ async function main() {
     if (newContent && newContent !== content) {
       fs.writeFileSync(fullPath, newContent);
       applied++;
+      appliedFindingKeys.add(findingKey(f));
       console.log(`Applied refactor to ${filePath} (${f.method}).`);
     }
   }
@@ -165,11 +228,31 @@ async function main() {
 
   execSync('git config user.name "github-actions[bot]"', { cwd: repoRootResolved });
   execSync('git config user.email "github-actions[bot]@users.noreply.github.com"', { cwd: repoRootResolved });
-  execSync('git add -A', { cwd: repoRootResolved });
+  // Only stage Modern API changes; never commit tooling/workflows/scripts.
+  execSync('git add modern-app/api', { cwd: repoRootResolved });
   execSync(`git commit -m "chore: AI refactor (${applied} finding(s))"`, { cwd: repoRootResolved });
   execSync(`git push origin HEAD:${prHeadRef}`, { cwd: repoRootResolved, env: { ...process.env, GIT_ASKPASS: '', GIT_TERMINAL_PROMPT: '0' } });
 
   const sha = execSync('git rev-parse HEAD', { cwd: repoRootResolved, encoding: 'utf8' }).trim();
+
+  // Mark bot review comments as resolved for findings we actually applied.
+  try {
+    const comments = await listReviewComments();
+    const resolvedStamp = `✅ Resolved by AI refactor in commit \`${sha.slice(0, 7)}\`.`;
+    for (const c of Array.isArray(comments) ? comments : []) {
+      const body = String(c?.body || '');
+      if (!body.includes(FINDING_MARKER_PREFIX)) continue;
+      const match = body.match(/<!-- ai-finding-key:\s*([^>]+)\s*-->/);
+      const key = match ? match[1].trim() : '';
+      if (!key) continue;
+      if (!appliedFindingKeys.has(key)) continue;
+      if (body.includes(resolvedStamp)) continue;
+      await updateReviewComment(c.id, `${body}\n\n${resolvedStamp}`);
+    }
+  } catch (e) {
+    console.warn(`Warning: failed to mark comments resolved. Continuing. ${e?.message || e}`);
+  }
+
   const comment =
     `✅ **AI refactor applied** (commit \`${sha.slice(0, 7)}\`, ${applied} change(s)).\n\n` +
     `Checks will re-run on this PR. **Please test locally and run your tests before merging.**`;

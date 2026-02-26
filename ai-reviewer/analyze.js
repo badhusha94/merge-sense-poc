@@ -188,7 +188,7 @@ function parseUnifiedDiff(diffContent) {
 function isScriptFile(filePath) {
   const p = (filePath || '').replace(/\\/g, '/');
   if (!p) return false;
-  if (p.startsWith('scripts/')) return true;
+  if (p.startsWith('scripts/') || p.startsWith('modern-app/scripts/')) return true;
   const lower = p.toLowerCase();
   return (
     lower.endsWith('.sql') ||

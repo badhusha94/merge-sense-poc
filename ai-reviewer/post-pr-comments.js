@@ -17,6 +17,7 @@ const repo = process.env.GITHUB_REPOSITORY;
 let prNumber = process.env.PR_NUMBER;
 const ref = process.env.GITHUB_REF;
 const APPLY_REFACTOR_HINT_MARKER = '<!-- ai-apply-refactor-hint -->';
+const FINDING_MARKER_PREFIX = '<!-- ai-finding-key:';
 
 if (!token || !repo) {
   console.error('GITHUB_TOKEN and GITHUB_REPOSITORY are required.');
@@ -52,6 +53,40 @@ function dedupe(findings) {
     seen.add(key);
     return true;
   });
+}
+
+function normalizeRepoPath(p) {
+  return String(p || '').replace(/\\/g, '/').replace(/^\.?\//, '');
+}
+
+function findingKey(f) {
+  const type = String(f?.type || '');
+  const title = String(f?.title || '');
+  const file = normalizeRepoPath(f?.file || '');
+  const line = typeof f?.line === 'number' ? String(f.line) : '';
+  const method = String(f?.method || '');
+  const matching = String(f?.matchingMethod || '');
+  return `${type}|${title}|${file}|${line}|${method}|${matching}`;
+}
+
+function markerForFinding(f) {
+  return `${FINDING_MARKER_PREFIX} ${findingKey(f)} -->`;
+}
+
+async function listReviewComments() {
+  const res = await fetch(`${apiBase}/pulls/${prNumber}/comments?per_page=100`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`Review comments API ${res.status}: ${t}`);
+  }
+  return await res.json();
 }
 
 /** Parse diff to build method name -> [{ path, line }]. Only added lines; line is in new file. */
@@ -243,6 +278,20 @@ function lineIsInHunks(ranges, line) {
 
 async function main() {
   findings = dedupe(findings);
+  const existingKeys = new Set();
+  try {
+    const existing = await listReviewComments();
+    for (const c of Array.isArray(existing) ? existing : []) {
+      const body = String(c?.body || '');
+      if (!body.includes(FINDING_MARKER_PREFIX)) continue;
+      const match = body.match(/<!-- ai-finding-key:\s*([^>]+)\s*-->/);
+      if (match && match[1]) existingKeys.add(match[1].trim());
+    }
+  } catch (e) {
+    // If we can't list comments, keep going; we'll still post anchored comments.
+    console.log(`Warning: failed to list existing review comments for dedupe. ${e?.message || e}`);
+  }
+
   let methodLocations = new Map();
   let hunkRanges = new Map();
   if (prDiffFile && prHeadSha) {
@@ -256,7 +305,13 @@ async function main() {
 
   let posted = 0;
   for (const f of findings) {
-    const body = formatCommentBody(f);
+    const key = findingKey(f);
+    if (existingKeys.has(key)) {
+      console.log(`Skip (already commented): ${f.type} ${f.method || f.title || '—'}`);
+      continue;
+    }
+
+    const body = `${formatCommentBody(f)}\n\n${markerForFinding(f)}`;
     const methodName = f.method;
     const filePath = f.file || '';
     let firstLoc = null;
