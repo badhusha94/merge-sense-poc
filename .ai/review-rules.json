@@ -2,8 +2,7 @@
   "layers": {
     "core": {
       "checks": [
-        "semantic-duplication",
-        "logic-safety"
+        "semantic-duplication"
       ]
     },
     "quality": {

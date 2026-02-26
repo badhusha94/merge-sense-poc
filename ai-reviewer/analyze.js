@@ -57,9 +57,11 @@ function loadPrompt(templateName, vars = {}) {
 /**
  * Extract C# method bodies (signature + body) using a simple regex.
  */
-function extractCSharpMethods(source) {
+function extractCSharpMethods(source, filePath = '') {
   const methods = [];
-  const methodRegex = /(?:public|private|protected|internal)?\s*(?:static\s+)?(?:async\s+)?(\w+(?:<[^>]+>)?)\s+(\w+)\s*\([^)]*\)[^{]*\{/g;
+  // Intentionally simple (regex-based) but avoids false positives by requiring an access modifier.
+  // This helps prevent extracting framework call sites like Ok() as "methods".
+  const methodRegex = /\b(public|private|protected|internal)\s+(?:static\s+)?(?:async\s+)?([\w<>\[\], ?]+)\s+(\w+)\s*\([^)]*\)\s*(?:where[^{]+)?\s*\{/g;
   let match;
   while ((match = methodRegex.exec(source)) !== null) {
     const start = match.index;
@@ -74,10 +76,45 @@ function extractCSharpMethods(source) {
     }
     const end = i;
     const methodText = source.slice(start, end).trim();
-    const name = match[2];
-    methods.push({ name, text: methodText });
+    const name = match[3];
+    const returnType = (match[2] || '').trim();
+    const startLine = source.slice(0, start).split('\n').length; // 1-based
+    methods.push({ file: filePath, line: startLine, name, returnType, text: methodText });
   }
   return methods;
+}
+
+function isBusinessMethodCandidate(m) {
+  // Reliability-first: only analyze user-created business logic methods that are likely part of migration.
+  const file = (m.file || '').replace(/\\/g, '/');
+  if (!file) return false;
+  if (!file.startsWith('modern-app/api/')) return false;
+  if (!file.endsWith('.cs')) return false;
+  if (file.includes('/Controllers/')) return false;
+  if (!file.includes('/Services/')) return false;
+
+  const rt = (m.returnType || '').replace(/\s+/g, '');
+  if (rt.includes('IActionResult') || rt.includes('ActionResult')) return false;
+
+  // Skip trivial wrappers to avoid noisy/extra comments.
+  const lines = (m.text || '').split('\n').filter((l) => l.trim().length > 0);
+  if (lines.length < 6) return false;
+  return true;
+}
+
+function changedCSharpFilesFromDiff(diffContent) {
+  const files = new Set();
+  if (!diffContent || typeof diffContent !== 'string') return [];
+  for (const line of diffContent.split('\n')) {
+    if (!line.startsWith('+++ b/')) continue;
+    const p = line.slice(6).trim();
+    if (!p.endsWith('.cs')) continue;
+    if (!p.startsWith('modern-app/api/')) continue;
+    if (p.includes('/bin/') || p.includes('/obj/')) continue;
+    if (p.endsWith('.g.cs') || p.endsWith('.AssemblyInfo.cs')) continue;
+    files.add(p);
+  }
+  return Array.from(files);
 }
 
 async function getEmbedding(text) {
@@ -157,36 +194,47 @@ function finding(type, severity, title, description, extra = {}) {
 }
 
 async function runSemanticDuplication(prMethods, mainMethods, findings) {
+  const mainEmbeddingCache = new Map();
   for (const prMethod of prMethods) {
     const prEmbedding = await getEmbedding(prMethod.text);
+    let best = null;
     for (const mainMethod of mainMethods) {
-      const mainEmbedding = await getEmbedding(mainMethod.text);
+      let mainEmbedding = mainEmbeddingCache.get(mainMethod.text);
+      if (!mainEmbedding) {
+        mainEmbedding = await getEmbedding(mainMethod.text);
+        mainEmbeddingCache.set(mainMethod.text, mainEmbedding);
+      }
       const similarity = cosineSimilarity(prEmbedding, mainEmbedding);
 
-      if (similarity >= SIMILARITY_THRESHOLD) {
-        const { same, explanation } = await confirmSameBusinessLogicWithExplanation(prMethod.text, mainMethod.text);
-        if (same) {
-          const suggestedAction = 'Consider reusing the existing method or moving shared logic to a common service.';
-          const cursorPrompt = `Refactor this method to reuse the existing logic from ${mainMethod.name} while preserving current behavior.`;
-          findings.push(finding(
-            'semantic-duplication',
-            'high',
-            'Semantic Duplicate Detected',
-            explanation,
-            {
-              method: prMethod.name,
-              matchingMethod: mainMethod.name,
-              similarityScore: Math.round(similarity * 100) / 100,
-              thresholdUsed: SIMILARITY_THRESHOLD,
-              aiExplanation: explanation,
-              suggestedAction,
-              cursorPrompt,
-            }
-          ));
-          console.log(`Finding: duplicate ${prMethod.name} <-> ${mainMethod.name} (${similarity.toFixed(2)})`);
-        }
-      }
+      if (similarity < SIMILARITY_THRESHOLD) continue;
+      if (!best || similarity > best.similarity) best = { mainMethod, similarity };
     }
+
+    if (!best) continue;
+
+    const { same, explanation } = await confirmSameBusinessLogicWithExplanation(prMethod.text, best.mainMethod.text);
+    if (!same) continue;
+
+    const suggestedAction = 'Consider reusing the existing method or moving shared logic to a common service.';
+    const cursorPrompt = `Refactor this method to reuse the existing logic from ${best.mainMethod.name} while preserving current behavior.`;
+    findings.push(finding(
+      'semantic-duplication',
+      'high',
+      'Semantic Duplicate Detected',
+      explanation,
+      {
+        file: prMethod.file || '',
+        line: prMethod.line || 0,
+        method: prMethod.name,
+        matchingMethod: best.mainMethod.name,
+        similarityScore: Math.round(best.similarity * 100) / 100,
+        thresholdUsed: SIMILARITY_THRESHOLD,
+        aiExplanation: explanation,
+        suggestedAction,
+        cursorPrompt,
+      }
+    ));
+    console.log(`Finding: duplicate ${prMethod.name} <-> ${best.mainMethod.name} (${best.similarity.toFixed(2)})`);
   }
 }
 
@@ -205,6 +253,8 @@ async function runLogicSafety(prMethods, mainMethods, findings) {
         'Business Logic May Have Changed',
         explanation,
         {
+          file: prMethod.file || '',
+          line: prMethod.line || 0,
           method: prMethod.name,
           aiExplanation: explanation,
           suggestedAction,
@@ -218,29 +268,43 @@ async function runLogicSafety(prMethods, mainMethods, findings) {
 
 async function main() {
   const rules = loadReviewRules();
-  const coreChecks = rules.layers.core?.checks || ['semantic-duplication', 'logic-safety'];
+  const coreChecks = rules.layers.core?.checks || ['semantic-duplication'];
 
   const prDiffRaw = readFileSafe(prDiffFile);
   const mainCode = readFileSafe(mainCodeFile);
-  const prCode = codeFromDiff(prDiffRaw) || mainCode;
-  const prMethods = extractCSharpMethods(prCode);
-  const mainMethods = extractCSharpMethods(mainCode);
+  const changedFiles = changedCSharpFilesFromDiff(prDiffRaw);
 
+  const prMethods = [];
+  for (const f of changedFiles) {
+    const abs = path.join(repoRoot, f);
+    const src = readFileSafe(abs);
+    if (!src) continue;
+    prMethods.push(...extractCSharpMethods(src, f));
+  }
+
+  // Fallback: if we couldn't resolve changed files (e.g. diff truncated), at least try added code.
   if (prMethods.length === 0) {
+    const prCode = codeFromDiff(prDiffRaw) || mainCode;
+    prMethods.push(...extractCSharpMethods(prCode, ''));
+  }
+
+  const mainMethods = extractCSharpMethods(mainCode, 'main_code.cs');
+
+  const prBusinessMethods = prMethods.filter(isBusinessMethodCandidate);
+  const mainBusinessMethods = mainMethods.filter(isBusinessMethodCandidate);
+
+  if (prBusinessMethods.length === 0) {
     console.log('No C# methods found in PR diff / code. Skipping AI review.');
     const outPath = path.isAbsolute(findingsOutput) ? findingsOutput : path.resolve(process.cwd(), findingsOutput);
     fs.writeFileSync(outPath, JSON.stringify([], null, 2));
     return;
   }
 
-  console.log(`PR methods: ${prMethods.length}, Main methods: ${mainMethods.length}. Running: ${coreChecks.join(', ')}`);
+  console.log(`PR methods: ${prBusinessMethods.length}, Main methods: ${mainBusinessMethods.length}. Running: ${coreChecks.join(', ')}`);
   const findings = [];
 
   if (coreChecks.includes('semantic-duplication')) {
-    await runSemanticDuplication(prMethods, mainMethods, findings);
-  }
-  if (coreChecks.includes('logic-safety')) {
-    await runLogicSafety(prMethods, mainMethods, findings);
+    await runSemanticDuplication(prBusinessMethods, mainBusinessMethods, findings);
   }
 
   const outPath = path.isAbsolute(findingsOutput) ? findingsOutput : path.resolve(process.cwd(), findingsOutput);

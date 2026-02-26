@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Posts AI review findings as PR comments. Uses Review Comments API (at line) when
- * file/line can be resolved from the diff; otherwise falls back to issue comment.
+ * Posts AI review findings as PR *review comments*.
+ * Reliability-first: only post when we can anchor to an exact diff line.
+ * Never fall back to issue comments (avoids wrong placement / extra noise).
  * Deduplicates by (type, method, matchingMethod). Short comments only.
  */
 
@@ -71,17 +72,39 @@ function methodLocationsFromDiff(diffContent) {
       if (match) newLine = parseInt(match[1], 10);
       continue;
     }
-    if (line.startsWith('+') && !line.startsWith('+++') && currentPath) {
+    if (!currentPath) continue;
+
+    // For review comment API `line`, GitHub expects the line number in the *new file* (RIGHT side),
+    // and it must be a line present in the diff hunk. Track newLine across added + context lines.
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      const content = line.slice(1);
       const lineNum = newLine;
       newLine++;
-      const content = line.slice(1);
-      const methodMatch = content.match(/\b(public|private|protected|internal)?\s*(?:static\s+)?(?:async\s+)?\w+\s+(\w+)\s*\(/);
+      const methodMatch = content.match(/^\s*(public|private|protected|internal)\s+(?:static\s+)?(?:async\s+)?[\w<>\[\], ?]+\s+(\w+)\s*\(/);
       if (methodMatch) {
         const name = methodMatch[2];
-        if (!map.has(name)) map.set(name, []);
-        map.get(name).push({ path: currentPath, line: lineNum });
+        const key = `${currentPath}::${name}`;
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push({ path: currentPath, line: lineNum });
       }
+      continue;
     }
+
+    if (line.startsWith(' ')) {
+      const content = line.slice(1);
+      const lineNum = newLine;
+      newLine++;
+      const methodMatch = content.match(/^\s*(public|private|protected|internal)\s+(?:static\s+)?(?:async\s+)?[\w<>\[\], ?]+\s+(\w+)\s*\(/);
+      if (methodMatch) {
+        const name = methodMatch[2];
+        const key = `${currentPath}::${name}`;
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push({ path: currentPath, line: lineNum });
+      }
+      continue;
+    }
+
+    // Deleted lines ('-') do not advance newLine.
   }
   return map;
 }
@@ -91,22 +114,20 @@ function formatCommentBody(f) {
   const threshold = f.thresholdUsed != null ? f.thresholdUsed : 0.88;
   if (f.type === 'semantic-duplication' && f.matchingMethod) {
     return (
-      `🧠 **Semantic duplicate** (similarity ${f.similarityScore ?? '—'}, threshold **${threshold}**)\n` +
+      `**Semantic duplicate** (similarity ${f.similarityScore ?? '—'}, threshold **${threshold}**)\n` +
       `Duplicates logic from \`${f.matchingMethod}\`. ${(f.aiExplanation || f.description || '').slice(0, 120)}…\n\n` +
       `**Action:** Reuse \`${f.matchingMethod}\` or extract shared logic.\n` +
-      `**Cursor:** \`${f.cursorPrompt || 'Refactor to reuse existing logic.'}\`\n\n` +
-      `_Comment \`/ai-apply-refactor\` on this PR to have the AI apply fixes (requires your approval)._`
+      `**Cursor prompt:** \`${f.cursorPrompt || 'Refactor to reuse existing logic.'}\``
     );
   }
   if (f.type === 'logic-safety') {
     return (
-      `🧠 **Logic safety** — ${(f.aiExplanation || f.description || '').slice(0, 120)}…\n\n` +
+      `**Logic safety** — ${(f.aiExplanation || f.description || '').slice(0, 120)}…\n\n` +
       `**Action:** Restore or align business rules/conditions/calculations.\n` +
-      `**Cursor:** \`${f.cursorPrompt || 'Restore original business logic.'}\`\n\n` +
-      `_Comment \`/ai-apply-refactor\` on this PR to have the AI apply fixes (requires your approval)._`
+      `**Cursor prompt:** \`${f.cursorPrompt || 'Restore original business logic.'}\``
     );
   }
-  return `🧠 **${f.title || f.type}** — ${(f.description || '').slice(0, 150)}`;
+  return `**${f.title || f.type}** — ${(f.description || '').slice(0, 150)}`;
 }
 
 const apiBase = `https://api.github.com/repos/${repo}`;
@@ -134,23 +155,6 @@ async function postReviewComment(body, commitId, path, line) {
   }
 }
 
-async function postIssueComment(body) {
-  const res = await fetch(`${apiBase}/issues/${prNumber}/comments`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ body }),
-  });
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`Issue comment API ${res.status}: ${t}`);
-  }
-}
-
 async function main() {
   findings = dedupe(findings);
   let methodLocations = new Map();
@@ -165,21 +169,39 @@ async function main() {
   for (const f of findings) {
     const body = formatCommentBody(f);
     const methodName = f.method;
-    const locs = methodName ? methodLocations.get(methodName) : null;
-    const firstLoc = locs && locs.length > 0 ? locs[0] : null;
+    const filePath = f.file || '';
+    let firstLoc = null;
+    if (methodName && filePath) {
+      const locs = methodLocations.get(`${filePath}::${methodName}`);
+      firstLoc = locs && locs.length > 0 ? locs[0] : null;
+    }
+    if (!firstLoc && methodName) {
+      // Fallback: pick the first match across files.
+      for (const [k, locs] of methodLocations.entries()) {
+        if (k.endsWith(`::${methodName}`) && locs && locs.length > 0) {
+          firstLoc = locs[0];
+          break;
+        }
+      }
+    }
 
-    if (prHeadSha && firstLoc) {
+    if (!prHeadSha || !firstLoc) {
+      // Skip rather than risk wrong placement or noisy issue comments.
+      console.log(`Skip (no reliable diff anchor): ${f.type} ${methodName || '—'}`);
+      continue;
+    }
+
+    try {
       await postReviewComment(body, prHeadSha, firstLoc.path, firstLoc.line);
       console.log(`Review comment at ${firstLoc.path}:${firstLoc.line} (${f.type}: ${methodName})`);
-    } else {
-      await postIssueComment(body);
-      console.log(`Issue comment (${f.type}: ${methodName || '—'})`);
+      posted++;
+    } catch (err) {
+      // Reliability-first: do not fall back to other comment types.
+      console.log(`Skip (review comment failed): ${f.type} ${methodName || '—'}`);
+      console.log(String(err));
     }
-    posted++;
   }
-  const summary = `_To have the AI apply these fixes (with your approval), comment \`/ai-apply-refactor\` on this PR. A human must approve before code is changed._`;
-  await postIssueComment(summary);
-  console.log(`Posted ${posted} comment(s) + refactor option.`);
+  console.log(`Posted ${posted} anchored review comment(s).`);
 }
 
 main().catch((err) => {
