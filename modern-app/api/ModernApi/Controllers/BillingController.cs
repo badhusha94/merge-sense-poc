@@ -7,6 +7,7 @@ namespace ModernApi.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[AuthFilter]
 public class BillingController : ControllerBase
 {
     private readonly BillingService _billingService;
@@ -37,4 +38,3 @@ public class BillingController : ControllerBase
         return Ok(new { amount });
     }
 }
-

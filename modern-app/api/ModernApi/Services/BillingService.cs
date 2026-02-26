@@ -26,7 +26,7 @@ public class BillingService
     // Redundant wrapper (semantic duplicate)
     public decimal CalculateInvoiceTotal(int age, decimal baseAmount)
     {
-        return GetBillingAmount(age, baseAmount);
+        return CalculateQuote(age, baseAmount);
     }
 
     // Another intentional duplicate: same logic, different name.
@@ -41,4 +41,3 @@ public class BillingService
         return amount;
     }
 }
-
