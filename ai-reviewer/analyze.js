@@ -13,7 +13,8 @@ import cosineSimilarity from 'cosine-similarity';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const SIMILARITY_THRESHOLD = 0.88;
+// Reliability-first: higher threshold reduces false-positive duplicate comments.
+const SIMILARITY_THRESHOLD = 0.92;
 const EMBEDDING_MODEL = 'text-embedding-3-small';
 const CHAT_MODEL = 'gpt-4o-mini';
 
@@ -84,19 +85,33 @@ function extractCSharpMethods(source, filePath = '') {
   return methods;
 }
 
-function isBusinessMethodCandidate(m) {
-  // Reliability-first: only analyze user-created business logic methods that are likely part of migration.
+function isPrBusinessMethodCandidate(m) {
+  // Reliability-first: analyze user-created methods likely to contain migrated business logic.
+  // Do NOT restrict to Services only; migrations can land in other folders during a sprint.
   const file = (m.file || '').replace(/\\/g, '/');
-  if (!file) return false;
-  if (!file.startsWith('modern-app/api/')) return false;
-  if (!file.endsWith('.cs')) return false;
-  if (file.includes('/Controllers/')) return false;
-  if (!file.includes('/Services/')) return false;
+  if (file) {
+    if (!file.startsWith('modern-app/api/')) return false;
+    if (!file.endsWith('.cs')) return false;
+    if (file.includes('/bin/') || file.includes('/obj/')) return false;
+    if (file.endsWith('.g.cs') || file.endsWith('.AssemblyInfo.cs') || file.endsWith('.GlobalUsings.g.cs')) return false;
+    if (file.endsWith('/Program.cs')) return false;
+  }
 
   const rt = (m.returnType || '').replace(/\s+/g, '');
   if (rt.includes('IActionResult') || rt.includes('ActionResult')) return false;
 
   // Skip trivial wrappers to avoid noisy/extra comments.
+  const lines = (m.text || '').split('\n').filter((l) => l.trim().length > 0);
+  if (lines.length < 6) return false;
+  return true;
+}
+
+function isMainBusinessMethodCandidate(m) {
+  // In the workflow, main branch code is concatenated into `main_code.cs` without per-file paths.
+  // So we cannot reliably filter main methods by file path. Instead, filter out controller-like methods.
+  const rt = (m.returnType || '').replace(/\s+/g, '');
+  if (rt.includes('IActionResult') || rt.includes('ActionResult')) return false;
+
   const lines = (m.text || '').split('\n').filter((l) => l.trim().length > 0);
   if (lines.length < 6) return false;
   return true;
@@ -290,8 +305,12 @@ async function main() {
 
   const mainMethods = extractCSharpMethods(mainCode, 'main_code.cs');
 
-  const prBusinessMethods = prMethods.filter(isBusinessMethodCandidate);
-  const mainBusinessMethods = mainMethods.filter(isBusinessMethodCandidate);
+  const prBusinessMethods = prMethods.filter(isPrBusinessMethodCandidate);
+  const mainBusinessMethods = mainMethods.filter(isMainBusinessMethodCandidate);
+
+  if (mainBusinessMethods.length === 0) {
+    console.log('No baseline (main) business methods found after filtering; semantic duplication cannot be detected.');
+  }
 
   if (prBusinessMethods.length === 0) {
     console.log('No C# methods found in PR diff / code. Skipping AI review.');
