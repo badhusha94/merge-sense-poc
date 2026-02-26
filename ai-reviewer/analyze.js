@@ -374,6 +374,102 @@ function fileBaseName(p) {
   return s.split('/').pop() || s;
 }
 
+function codeContextWindow(filePath, lineNumber, radius = 6) {
+  if (!filePath || !lineNumber) return { focusLine: '', context: '' };
+  const abs = path.join(repoRoot, filePath);
+  const content = readFileSafe(abs);
+  if (!content) return { focusLine: '', context: '' };
+  const lines = content.split('\n');
+  const idx = Math.max(0, Math.min(lines.length - 1, Number(lineNumber) - 1));
+  const start = Math.max(0, idx - radius);
+  const end = Math.min(lines.length - 1, idx + radius);
+  const ctx = [];
+  for (let i = start; i <= end; i++) {
+    const ln = i + 1;
+    ctx.push(`${ln}|${lines[i]}`);
+  }
+  return { focusLine: lines[idx] || '', context: ctx.join('\n') };
+}
+
+async function aiEnhanceCSharpLearningFinding(finding) {
+  const file = String(finding.file || '');
+  const line = Number(finding.line || 0);
+  const { focusLine, context } = codeContextWindow(file, line, 6);
+
+  const prompt = [
+    'You are a senior C# reviewer coaching a developer.',
+    'Given the code context and the highlighted line, write a short, crisp learning tip.',
+    '',
+    'Output MUST be strict JSON with keys:',
+    '- "explanation": string (max 220 chars)',
+    '- "action": string (max 120 chars)',
+    '- "cursorPrompt": string (max 180 chars)',
+    '- "rewrite": string (optional, max 260 chars, may include a tiny code snippet)',
+    '',
+    'Rules:',
+    '- Keep it friendly and specific to the code shown.',
+    '- Prefer modern C#/.NET idioms (C# 10+).',
+    '- Do NOT mention line numbers.',
+    '- Do NOT add markdown fences.',
+    '',
+    `Finding title: ${finding.title || ''}`,
+    `File: ${file}`,
+    `Highlighted line: ${focusLine}`,
+    '',
+    'Context (lineNumber|code):',
+    context || '(no context available)',
+  ].join('\n');
+
+  const completion = await openai.chat.completions.create({
+    model: CHAT_MODEL,
+    messages: [{ role: 'user', content: prompt }],
+    max_tokens: 220,
+  });
+
+  const raw = (completion.choices[0]?.message?.content || '').trim();
+  let obj;
+  try {
+    obj = JSON.parse(raw);
+  } catch {
+    // Fallback: keep deterministic text if model didn't comply.
+    return finding;
+  }
+
+  const explanation = String(obj.explanation || '').trim();
+  const action = String(obj.action || '').trim();
+  const cursorPrompt = String(obj.cursorPrompt || '').trim();
+  const rewrite = String(obj.rewrite || '').trim();
+
+  const descParts = [];
+  if (explanation) descParts.push(explanation);
+  if (rewrite) descParts.push(`Example: ${rewrite}`);
+  const description = descParts.join(' ');
+
+  return {
+    ...finding,
+    description: description || finding.description,
+    aiExplanation: explanation || finding.aiExplanation,
+    suggestedAction: action || finding.suggestedAction,
+    cursorPrompt: cursorPrompt || finding.cursorPrompt,
+  };
+}
+
+async function aiEnhanceCSharpLearningFindings(findings) {
+  const enhanced = [];
+  for (const f of findings) {
+    if (f.type !== 'csharp-learning') {
+      enhanced.push(f);
+      continue;
+    }
+    try {
+      enhanced.push(await aiEnhanceCSharpLearningFinding(f));
+    } catch {
+      enhanced.push(f);
+    }
+  }
+  return enhanced;
+}
+
 function runProjectSpecificChecks(prDiffRaw, findings) {
   const parsed = parseUnifiedDiff(prDiffRaw);
   const changedApiFiles = new Set();
@@ -1220,9 +1316,12 @@ async function main() {
   runDuplicateConstantChecks(prDiffRaw, mainCode, findings);
   runDtoShapeDuplicationChecks(prDiffRaw, mainCode, findings);
 
+  // AI enhancement for C# learning tips (tailored + future-proof explanation)
+  const enhancedFindings = await aiEnhanceCSharpLearningFindings(findings);
+
   const outPath = path.isAbsolute(findingsOutput) ? findingsOutput : path.resolve(process.cwd(), findingsOutput);
-  fs.writeFileSync(outPath, JSON.stringify(findings, null, 2));
-  console.log(`Wrote ${findings.length} finding(s) to ${outPath}`);
+  fs.writeFileSync(outPath, JSON.stringify(enhancedFindings, null, 2));
+  console.log(`Wrote ${enhancedFindings.length} finding(s) to ${outPath}`);
 }
 
 main().catch((err) => {
