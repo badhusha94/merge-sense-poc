@@ -45,9 +45,11 @@ jobs:
       - name: Ensure apply-refactor script is up to date (prefer main)
         run: |
           git fetch origin main 2>/dev/null || true
-          # Always prefer main's workflow/script fixes (PR branches often don't include AI tooling changes).
-          git show origin/main:ai-reviewer/apply-refactor.js > ai-reviewer/apply-refactor.js 2>/dev/null || true
-          test -f ai-reviewer/apply-refactor.js || (echo "apply-refactor.js not found on this branch or main" && exit 1)
+          # Always prefer main's workflow/script fixes (PR branches often don't include AI tooling changes),
+          # but DO NOT modify the repo working tree (otherwise the bot may commit tooling changes).
+          mkdir -p "$RUNNER_TEMP/ai-reviewer"
+          git show origin/main:ai-reviewer/apply-refactor.js > "$RUNNER_TEMP/ai-reviewer/apply-refactor.js" 2>/dev/null || true
+          test -f "$RUNNER_TEMP/ai-reviewer/apply-refactor.js" || (echo "apply-refactor.js not found on this branch or main" && exit 1)
 
       - name: Configure git for push
         run: |
@@ -58,7 +60,7 @@ jobs:
       - name: Get diff vs main
         run: |
           git fetch origin main 2>/dev/null || true
-          git diff origin/main...HEAD -- "modern-app/api/**" > pr.diff || true
+          git diff origin/main...HEAD -- "modern-app/api/**" "modern-app/scripts/**" > pr.diff || true
           echo "PR_DIFF_FILE=${{ github.workspace }}/pr.diff" >> $GITHUB_ENV
 
       - name: Extract C# from main branch
@@ -89,7 +91,6 @@ jobs:
         run: node analyze.js
 
       - name: Apply AI refactor (commit + push)
-        working-directory: ai-reviewer
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -99,7 +100,7 @@ jobs:
           PR_HEAD_REF: ${{ needs.detect.outputs.head_ref }}
           FINDINGS_OUTPUT: ${{ github.workspace }}/findings.json
           PR_DIFF_FILE: ${{ github.workspace }}/pr.diff
-        run: node apply-refactor.js
+        run: node "$RUNNER_TEMP/ai-reviewer/apply-refactor.js"
 
       - name: Trigger AI Semantic Review (workflow_dispatch)
         shell: bash
@@ -107,8 +108,9 @@ jobs:
           set -euo pipefail
           # The bot push done via GITHUB_TOKEN may not trigger pull_request workflows automatically.
           # Explicitly dispatch the review workflow on the PR branch so the required check runs.
-          curl -sS -X POST \
+          curl --fail-with-body -sS -X POST \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
             "https://api.github.com/repos/${{ github.repository }}/actions/workflows/ai-review.yml/dispatches" \
             -d '{"ref":"${{ needs.detect.outputs.head_ref }}"}'

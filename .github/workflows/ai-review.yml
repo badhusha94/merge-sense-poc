@@ -25,11 +25,11 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin main 2>/dev/null || true
-          # Only pay the OpenAI cost when API code changed; still succeed either way so required checks don't hang.
-          CHANGED=$(git diff --name-only origin/main...HEAD -- "modern-app/api/**" | wc -l | tr -d ' ')
+          # Reliability-first: run review when API code or scripts changed.
+          CHANGED=$(git diff --name-only origin/main...HEAD -- "modern-app/api/**" "modern-app/scripts/**" | wc -l | tr -d ' ')
           if [ "${CHANGED}" = "0" ]; then
             echo "run_review=false" >> "$GITHUB_OUTPUT"
-            echo "No changes under modern-app/api/**; skipping AI review."
+            echo "No changes under modern-app/api/** or modern-app/scripts/**; skipping AI review."
           else
             echo "run_review=true" >> "$GITHUB_OUTPUT"
           fi
@@ -38,7 +38,7 @@ jobs:
         if: steps.filter.outputs.run_review == 'true'
         run: |
           git fetch origin main 2>/dev/null || true
-          git diff origin/main...HEAD -- "modern-app/api/**" > pr.diff || true
+          git diff origin/main...HEAD -- "modern-app/api/**" "modern-app/scripts/**" > pr.diff || true
           echo "PR_DIFF_FILE=${{ github.workspace }}/pr.diff" >> $GITHUB_ENV
 
       - name: Extract C# from main branch
