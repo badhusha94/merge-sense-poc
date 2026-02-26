@@ -16,6 +16,7 @@ const token = process.env.GITHUB_TOKEN;
 const repo = process.env.GITHUB_REPOSITORY;
 let prNumber = process.env.PR_NUMBER;
 const ref = process.env.GITHUB_REF;
+const APPLY_REFACTOR_HINT_MARKER = '<!-- ai-apply-refactor-hint -->';
 
 if (!token || !repo) {
   console.error('GITHUB_TOKEN and GITHUB_REPOSITORY are required.');
@@ -134,6 +135,56 @@ function formatCommentBody(f) {
 
 const apiBase = `https://api.github.com/repos/${repo}`;
 
+async function listIssueComments() {
+  const res = await fetch(`${apiBase}/issues/${prNumber}/comments?per_page=100`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`Issue comments API ${res.status}: ${t}`);
+  }
+  return await res.json();
+}
+
+async function postIssueComment(body) {
+  const res = await fetch(`${apiBase}/issues/${prNumber}/comments`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ body }),
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`Issue comment API ${res.status}: ${t}`);
+  }
+}
+
+async function maybePostApplyRefactorHint() {
+  try {
+    const comments = await listIssueComments();
+    const already = Array.isArray(comments) && comments.some((c) => String(c?.body || '').includes(APPLY_REFACTOR_HINT_MARKER));
+    if (already) return;
+
+    const body =
+      `${APPLY_REFACTOR_HINT_MARKER}\n` +
+      `To have the AI apply safe refactors for these findings (requires approval), add a PR comment:\n\n` +
+      `\`/ai-apply-refactor\``;
+    await postIssueComment(body);
+  } catch (e) {
+    // Reliability-first: never fail the workflow because the hint couldn't be posted.
+    console.log(`Warning: failed to post apply-refactor hint. ${e?.message || e}`);
+  }
+}
+
 async function postReviewComment(body, commitId, path, line) {
   const res = await fetch(`${apiBase}/pulls/${prNumber}/comments`, {
     method: 'POST',
@@ -250,6 +301,9 @@ async function main() {
     }
   }
   console.log(`Posted ${posted} anchored review comment(s).`);
+
+  // UX: Post once as a single PR (issue) comment so devs discover /ai-apply-refactor.
+  await maybePostApplyRefactorHint();
 }
 
 main().catch((err) => {

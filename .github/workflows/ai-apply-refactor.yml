@@ -58,7 +58,7 @@ jobs:
       - name: Get diff vs main
         run: |
           git fetch origin main 2>/dev/null || true
-          git diff origin/main...HEAD -- "modern-app/api/**" > pr.diff || true
+          git diff origin/main...HEAD -- "modern-app/api/**" "scripts/**" > pr.diff || true
           echo "PR_DIFF_FILE=${{ github.workspace }}/pr.diff" >> $GITHUB_ENV
 
       - name: Extract C# from main branch
