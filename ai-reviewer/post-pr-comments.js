@@ -156,9 +156,12 @@ function formatCommentBody(f) {
     : (f.thresholdUsed != null ? Math.round(Number(f.thresholdUsed) * 100) : null);
 
   if (f.type === 'semantic-duplication' && f.matchingMethod) {
+    const matchLoc = f.matchingFile
+      ? ` (${f.matchingFile}${typeof f.matchingLine === 'number' && f.matchingLine > 0 ? `:${f.matchingLine}` : ''})`
+      : '';
     return (
       `**Semantic duplicate** (similarity ${similarityPct != null ? `${similarityPct}%` : '—'}, threshold **${thresholdPct != null ? `${thresholdPct}%` : '—'}**)\n` +
-      `Duplicates logic from \`${f.matchingMethod}\`. ${(f.aiExplanation || f.description || '').slice(0, 120)}…\n\n` +
+      `Duplicates logic from \`${f.matchingMethod}\`${matchLoc}. ${(f.aiExplanation || f.description || '').slice(0, 120)}…\n\n` +
       `**Action:** Reuse \`${f.matchingMethod}\` or extract shared logic.\n` +
       `**Cursor prompt:** \`${f.cursorPrompt || 'Refactor to reuse existing logic.'}\``
     );

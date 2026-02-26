@@ -46,7 +46,9 @@ jobs:
         run: |
           touch main_code.cs
           for f in $(git ls-tree -r origin/main --name-only 2>/dev/null | grep '\.cs$' | grep 'modern-app/api/'); do
+            echo "// FILE: $f" >> main_code.cs
             git show "origin/main:$f" 2>/dev/null >> main_code.cs || true
+            echo "" >> main_code.cs
           done
           echo "MAIN_CODE_FILE=${{ github.workspace }}/main_code.cs" >> $GITHUB_ENV
 
