@@ -120,14 +120,16 @@ function formatCommentBody(f) {
       `**Cursor prompt:** \`${f.cursorPrompt || 'Refactor to reuse existing logic.'}\``
     );
   }
-  if (f.type === 'logic-safety') {
-    return (
-      `**Logic safety** — ${(f.aiExplanation || f.description || '').slice(0, 120)}…\n\n` +
-      `**Action:** Restore or align business rules/conditions/calculations.\n` +
-      `**Cursor prompt:** \`${f.cursorPrompt || 'Restore original business logic.'}\``
-    );
-  }
-  return `**${f.title || f.type}** — ${(f.description || '').slice(0, 150)}`;
+  const title = f.title || f.type || 'Finding';
+  const desc = (f.description || f.aiExplanation || '').trim();
+  const action = (f.suggestedAction || '').trim();
+  const cursor = (f.cursorPrompt || '').trim();
+
+  let body = `**${title}**\n`;
+  if (desc) body += `${desc}\n`;
+  if (action) body += `\n**Action:** ${action}\n`;
+  if (cursor) body += `**Cursor prompt:** \`${cursor}\`\n`;
+  return body.trim();
 }
 
 const apiBase = `https://api.github.com/repos/${repo}`;
@@ -155,13 +157,49 @@ async function postReviewComment(body, commitId, path, line) {
   }
 }
 
+function hunkRangesFromDiff(diffContent) {
+  const map = new Map();
+  if (!diffContent || typeof diffContent !== 'string') return map;
+
+  let currentPath = null;
+  for (const line of diffContent.split('\n')) {
+    if (line.startsWith('+++ b/')) {
+      currentPath = line.slice(6).trim();
+      if (currentPath && !map.has(currentPath)) map.set(currentPath, []);
+      continue;
+    }
+    if (!currentPath) continue;
+    if (!line.startsWith('@@')) continue;
+
+    const match = line.match(/\+(\d+)(?:,(\d+))?/);
+    if (!match) continue;
+    const start = Number(match[1]);
+    const count = match[2] ? Number(match[2]) : 1;
+    const end = start + Math.max(0, count - 1);
+    map.get(currentPath).push({ start, end });
+  }
+  return map;
+}
+
+function lineIsInHunks(ranges, line) {
+  if (!Array.isArray(ranges) || ranges.length === 0) return false;
+  if (!line || typeof line !== 'number') return false;
+  for (const r of ranges) {
+    if (line >= r.start && line <= r.end) return true;
+  }
+  return false;
+}
+
 async function main() {
   findings = dedupe(findings);
   let methodLocations = new Map();
+  let hunkRanges = new Map();
   if (prDiffFile && prHeadSha) {
     const diffPath = path.isAbsolute(prDiffFile) ? prDiffFile : path.resolve(process.cwd(), prDiffFile);
     if (fs.existsSync(diffPath)) {
-      methodLocations = methodLocationsFromDiff(fs.readFileSync(diffPath, 'utf8'));
+      const diff = fs.readFileSync(diffPath, 'utf8');
+      methodLocations = methodLocationsFromDiff(diff);
+      hunkRanges = hunkRangesFromDiff(diff);
     }
   }
 
@@ -171,7 +209,17 @@ async function main() {
     const methodName = f.method;
     const filePath = f.file || '';
     let firstLoc = null;
-    if (methodName && filePath) {
+
+    // Prefer explicit (file, line) anchors from findings.
+    if (filePath && typeof f.line === 'number') {
+      const ranges = hunkRanges.get(filePath) || [];
+      if (lineIsInHunks(ranges, f.line)) {
+        firstLoc = { path: filePath, line: f.line };
+      }
+    }
+
+    // Fallback: method-based anchoring.
+    if (!firstLoc && methodName && filePath) {
       const locs = methodLocations.get(`${filePath}::${methodName}`);
       firstLoc = locs && locs.length > 0 ? locs[0] : null;
     }
