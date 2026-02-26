@@ -48,7 +48,8 @@ if (!Array.isArray(findings) || findings.length === 0) {
 function dedupe(findings) {
   const seen = new Set();
   return findings.filter((f) => {
-    const key = `${f.type}|${f.method || ''}|${f.matchingMethod || ''}`;
+    // Reliability: project-rule findings often have no method name, so dedupe on full finding identity.
+    const key = findingKey(f);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -147,10 +148,16 @@ function methodLocationsFromDiff(diffContent) {
 
 /** Short comment body; include threshold for semantic-duplication. */
 function formatCommentBody(f) {
-  const threshold = f.thresholdUsed != null ? f.thresholdUsed : 0.88;
+  const similarityPct = typeof f.similarityPercent === 'number'
+    ? f.similarityPercent
+    : (typeof f.similarityScore === 'number' ? Math.round(f.similarityScore * 100) : null);
+  const thresholdPct = typeof f.thresholdPercent === 'number'
+    ? f.thresholdPercent
+    : (f.thresholdUsed != null ? Math.round(Number(f.thresholdUsed) * 100) : null);
+
   if (f.type === 'semantic-duplication' && f.matchingMethod) {
     return (
-      `**Semantic duplicate** (similarity ${f.similarityScore ?? '—'}, threshold **${threshold}**)\n` +
+      `**Semantic duplicate** (similarity ${similarityPct != null ? `${similarityPct}%` : '—'}, threshold **${thresholdPct != null ? `${thresholdPct}%` : '—'}**)\n` +
       `Duplicates logic from \`${f.matchingMethod}\`. ${(f.aiExplanation || f.description || '').slice(0, 120)}…\n\n` +
       `**Action:** Reuse \`${f.matchingMethod}\` or extract shared logic.\n` +
       `**Cursor prompt:** \`${f.cursorPrompt || 'Refactor to reuse existing logic.'}\``

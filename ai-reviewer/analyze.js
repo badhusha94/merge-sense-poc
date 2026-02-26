@@ -13,8 +13,8 @@ import cosineSimilarity from 'cosine-similarity';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Reliability-first: higher threshold reduces false-positive duplicate comments.
-const SIMILARITY_THRESHOLD = 0.92;
+// Project policy: any similarity >= 70% should be refactored.
+const SIMILARITY_THRESHOLD = 0.70;
 const EMBEDDING_MODEL = 'text-embedding-3-small';
 const CHAT_MODEL = 'gpt-4o-mini';
 
@@ -218,6 +218,9 @@ function runProjectSpecificChecks(prDiffRaw, findings) {
   const parsed = parseUnifiedDiff(prDiffRaw);
   const changedApiFiles = new Set();
   const changedTestFiles = new Set();
+  const maxLearningSuggestionsTotal = 12;
+  const maxLearningSuggestionsPerFile = 3;
+  let learningSuggestionsTotal = 0;
 
   // ---- Script rules ----
   for (const [file, info] of parsed.entries()) {
@@ -353,6 +356,8 @@ function runProjectSpecificChecks(prDiffRaw, findings) {
     const isController = norm.includes('/Controllers/');
     if (norm.includes('/Tests/') || /test/i.test(norm)) changedTestFiles.add(norm);
     changedApiFiles.add(norm);
+
+    let learningSuggestionsForFile = 0;
 
     const abs = path.join(repoRoot, norm);
     const fullContent = readFileSafe(abs);
@@ -553,6 +558,120 @@ function runProjectSpecificChecks(prDiffRaw, findings) {
       }
     }
 
+    // Learning tips (diff-based, low severity, capped to avoid spam)
+    for (let i = 0; i < info.lines.length; i++) {
+      if (learningSuggestionsTotal >= maxLearningSuggestionsTotal) break;
+      if (learningSuggestionsForFile >= maxLearningSuggestionsPerFile) break;
+
+      const dl = info.lines[i];
+      if (dl.kind !== '+') continue;
+      const text = dl.text || '';
+      const lineNo = dl.line || firstHunkLine(info);
+
+      const addTip = (title, description, cursorPrompt) => {
+        if (learningSuggestionsTotal >= maxLearningSuggestionsTotal) return;
+        if (learningSuggestionsForFile >= maxLearningSuggestionsPerFile) return;
+        findings.push(finding(
+          'csharp-learning',
+          'low',
+          title,
+          description,
+          {
+            file: norm,
+            line: lineNo,
+            cursorPrompt,
+            suggestedAction: 'Consider using the modern C# alternative.',
+          }
+        ));
+        learningSuggestionsTotal++;
+        learningSuggestionsForFile++;
+      };
+
+      // string.Format -> interpolation
+      if (/\bstring\.Format\s*\(/i.test(text)) {
+        addTip(
+          'C# tip: Prefer string interpolation over string.Format',
+          'String interpolation is usually more readable than string.Format for composing strings.',
+          'Replace string.Format(...) with an interpolated string ($"...") if it improves readability.'
+        );
+        continue;
+      }
+
+      // Multiple string concatenations with literals -> interpolation
+      if (text.includes('"') && /\+/.test(text) && (text.match(/\+/g) || []).length >= 2 && !/\+\+/.test(text)) {
+        addTip(
+          'C# tip: Consider string interpolation',
+          'This looks like multiple string concatenations; interpolation can be clearer and less error-prone.',
+          'Refactor to string interpolation ($"...") if the intent is string building.'
+        );
+        continue;
+      }
+
+      // Loop concatenation -> StringBuilder
+      const inLoopWindow = info.lines.slice(Math.max(0, i - 10), i + 1).some((l) => (l?.text || '').match(/\b(for|foreach)\s*\(/));
+      if (inLoopWindow && /\b\w+\s*\+=\s*".*"/.test(text)) {
+        addTip(
+          'C# tip: Use StringBuilder for concatenation in loops',
+          'Repeated string concatenation in a loop can allocate many intermediate strings; StringBuilder is often a better fit.',
+          'Use a StringBuilder, Append(...) inside the loop, then builder.ToString() at the end.'
+        );
+        continue;
+      }
+
+      // ArgumentNullException -> ThrowIfNull
+      if (/throw\s+new\s+ArgumentNullException\s*\(\s*nameof\s*\(/.test(text) || /\bArgumentNullException\s*\(\s*nameof\s*\(/.test(text)) {
+        addTip(
+          'C# tip: Use ArgumentNullException.ThrowIfNull',
+          'C# provides ArgumentNullException.ThrowIfNull(x) for concise null argument checks.',
+          'Replace manual ArgumentNullException(nameof(x)) with ArgumentNullException.ThrowIfNull(x) where applicable.'
+        );
+        continue;
+      }
+
+      // using(...) -> using declaration
+      if (/^\s*using\s*\(\s*(var|[\w<>\[\]]+)\s+\w+\s*=/.test(text)) {
+        addTip(
+          'C# tip: Prefer using declarations',
+          'Using declarations (using var x = ...) reduce nesting compared to using(...) { ... }.',
+          'Consider using a using declaration: `using var resource = ...;` if it fits the scope.'
+        );
+        continue;
+      }
+
+      // Tuple -> value tuple
+      if (/\bTuple\.Create\s*\(/.test(text) || /\bnew\s+Tuple\s*</.test(text)) {
+        addTip(
+          'C# tip: Prefer value tuples over Tuple',
+          'Value tuples ((a, b)) are more idiomatic and often easier to read than Tuple<T1,T2>.',
+          'Consider switching Tuple/Create to a value tuple, optionally with named elements.'
+        );
+        continue;
+      }
+
+      // Target-typed new
+      if (/\b(List|Dictionary|HashSet|Queue|Stack)<[^>]+>\s+\w+\s*=\s*new\s+\1<[^>]+>\s*\(\s*\)/.test(text)) {
+        addTip(
+          'C# tip: Use target-typed new()',
+          'Target-typed `new()` can reduce repetition when the type is already specified on the left.',
+          'Replace `new Type<...>()` with `new()` where it improves readability.'
+        );
+        continue;
+      }
+
+      // Suggest records for immutable DTO-like types (best-effort heuristic: class name ends with Request/Response/Dto)
+      const classMatch = text.match(/^\s*public\s+class\s+(\w+)\b/);
+      if (classMatch) {
+        const name = classMatch[1] || '';
+        if (/(Request|Response|Dto)$/i.test(name)) {
+          addTip(
+            'C# tip: Consider record types for immutable DTOs',
+            'Records are a good fit for immutable, data-centric types (value semantics, concise syntax).',
+            'If this type is intended to be immutable DTO data, consider using `record` (and `init`/`required` as appropriate).'
+          );
+        }
+      }
+    }
+
     // 6) API methods must use AuthFilter/Authorize except login (check newly added action methods in controllers)
     if (isController) {
       const controllerHasAuth =
@@ -715,7 +834,7 @@ async function runSemanticDuplication(prMethods, mainMethods, findings) {
 
     const suggestedAction = 'Consider reusing the existing method or moving shared logic to a common service.';
     const cursorPrompt = `Refactor this method to reuse the existing logic from ${best.mainMethod.name} while preserving current behavior.`;
-    findings.push(finding(
+        findings.push(finding(
       'semantic-duplication',
       'high',
       'Semantic Duplicate Detected',
@@ -725,8 +844,10 @@ async function runSemanticDuplication(prMethods, mainMethods, findings) {
         line: prMethod.line || 0,
         method: prMethod.name,
         matchingMethod: best.mainMethod.name,
-        similarityScore: Math.round(best.similarity * 100) / 100,
-        thresholdUsed: SIMILARITY_THRESHOLD,
+            similarityScore: Math.round(best.similarity * 100) / 100,
+            similarityPercent: Math.round(best.similarity * 100),
+            thresholdUsed: SIMILARITY_THRESHOLD,
+            thresholdPercent: Math.round(SIMILARITY_THRESHOLD * 100),
         aiExplanation: explanation,
         suggestedAction,
         cursorPrompt,
