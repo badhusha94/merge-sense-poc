@@ -402,13 +402,15 @@ async function aiEnhanceCSharpLearningFinding(finding) {
     '',
     'Output MUST be strict JSON with keys:',
     '- "explanation": string (max 220 chars)',
-    '- "action": string (max 120 chars)',
-    '- "cursorPrompt": string (max 180 chars)',
-    '- "rewrite": string (optional, max 260 chars, may include a tiny code snippet)',
+    '- "directReplacement": boolean',
+    '- "replacementCode": string (optional, max 220 chars, 1-3 lines, no markdown fences)',
+    '- "cursorPrompt": string (optional, max 180 chars)',
     '',
     'Rules:',
     '- Keep it friendly and specific to the code shown.',
     '- Prefer modern C#/.NET idioms (C# 10+).',
+    '- If the improvement is a safe, local 1-3 line change, set directReplacement=true and provide replacementCode. Leave cursorPrompt empty.',
+    '- If the improvement needs broader refactor (e.g. StringBuilder across a block), set directReplacement=false and provide a high-level cursorPrompt. Omit replacementCode.',
     '- Do NOT mention line numbers.',
     '- Do NOT add markdown fences.',
     '',
@@ -436,21 +438,24 @@ async function aiEnhanceCSharpLearningFinding(finding) {
   }
 
   const explanation = String(obj.explanation || '').trim();
-  const action = String(obj.action || '').trim();
+  const directReplacement = Boolean(obj.directReplacement);
+  const replacementCode = String(obj.replacementCode || '').trim();
   const cursorPrompt = String(obj.cursorPrompt || '').trim();
-  const rewrite = String(obj.rewrite || '').trim();
 
-  const descParts = [];
-  if (explanation) descParts.push(explanation);
-  if (rewrite) descParts.push(`Example: ${rewrite}`);
-  const description = descParts.join(' ');
+  const replacementLines = replacementCode ? replacementCode.split('\n').filter((l) => l.trim().length > 0) : [];
+  const isReplacementShort = replacementCode.length > 0 && replacementCode.length <= 220 && replacementLines.length <= 3;
+  const allowReplacement = directReplacement && isReplacementShort;
+
+  const description = explanation || finding.description;
 
   return {
     ...finding,
-    description: description || finding.description,
+    description,
     aiExplanation: explanation || finding.aiExplanation,
-    suggestedAction: action || finding.suggestedAction,
-    cursorPrompt: cursorPrompt || finding.cursorPrompt,
+    // For straightforward replacements, we show code directly and omit cursor prompt in PR comment rendering.
+    directReplacement: allowReplacement,
+    replacementCode: allowReplacement ? replacementCode : '',
+    cursorPrompt: allowReplacement ? '' : (cursorPrompt || finding.cursorPrompt),
   };
 }
 

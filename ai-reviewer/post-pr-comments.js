@@ -166,6 +166,34 @@ function formatCommentBody(f) {
       `**Cursor prompt:** \`${f.cursorPrompt || 'Refactor to reuse existing logic.'}\``
     );
   }
+
+  if (f.type === 'csharp-learning') {
+    const title = f.title || 'C# tip';
+    const desc = (f.aiExplanation || f.description || '').trim();
+    const replacement = String(f.replacementCode || '').trim();
+    const direct = Boolean(f.directReplacement) && replacement.length > 0;
+
+    let body = `**${title}**\n`;
+    if (desc) body += `${desc}\n`;
+
+    if (direct) {
+      const lines = replacement.split('\n').filter((l) => l.trim().length > 0);
+      if (lines.length <= 1) {
+        body += `\n**Replace with:** \`${replacement}\`\n`;
+      } else {
+        body += `\n**Replace with:**\n\`\`\`csharp\n${replacement}\n\`\`\`\n`;
+      }
+      // Intentionally omit cursor prompt for direct replacements.
+      return body.trim();
+    }
+
+    const action = (f.suggestedAction || '').trim();
+    const cursor = (f.cursorPrompt || '').trim();
+    if (action) body += `\n**Action:** ${action}\n`;
+    if (cursor) body += `**Cursor prompt:** \`${cursor}\`\n`;
+    return body.trim();
+  }
+
   const title = f.title || f.type || 'Finding';
   const desc = (f.description || f.aiExplanation || '').trim();
   const action = (f.suggestedAction || '').trim();
