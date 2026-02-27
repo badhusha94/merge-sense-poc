@@ -85,6 +85,166 @@ function extractCSharpMethods(source, filePath = '') {
   return methods;
 }
 
+function extractCSharpMethodsFromMainCode(mainCode) {
+  const lines = String(mainCode || '').split('\n');
+  let currentFile = '';
+  let buf = [];
+  const out = [];
+
+  const flush = () => {
+    if (buf.length === 0) return;
+    const chunk = buf.join('\n');
+    out.push(...extractCSharpMethods(chunk, currentFile || 'main_code.cs'));
+    buf = [];
+  };
+
+  for (const line of lines) {
+    const m = line.match(/^\s*\/\/\s*FILE:\s*(.+)\s*$/);
+    if (m) {
+      flush();
+      currentFile = (m[1] || '').trim();
+      continue;
+    }
+    buf.push(line);
+  }
+  flush();
+  return out;
+}
+
+function extractCSharpConstants(source, filePath = '') {
+  const out = [];
+  const lines = String(source || '').split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] || '';
+    // Single-line const declarations only (reliability-first).
+    const m = line.match(/\bconst\s+([\w<>\[\], ?]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+)\s*;/);
+    if (!m) continue;
+    const type = (m[1] || '').trim();
+    const name = (m[2] || '').trim();
+    const valueRaw = (m[3] || '').trim();
+    const valueNormalized = valueRaw.replace(/\s+/g, '');
+    out.push({
+      file: filePath,
+      line: i + 1,
+      type,
+      name,
+      valueRaw,
+      valueNormalized,
+    });
+  }
+  return out;
+}
+
+function extractCSharpConstantsFromMainCode(mainCode) {
+  const lines = String(mainCode || '').split('\n');
+  let currentFile = '';
+  let buf = [];
+  const out = [];
+
+  const flush = () => {
+    if (buf.length === 0) return;
+    const chunk = buf.join('\n');
+    out.push(...extractCSharpConstants(chunk, currentFile || 'main_code.cs'));
+    buf = [];
+  };
+
+  for (const line of lines) {
+    const m = line.match(/^\s*\/\/\s*FILE:\s*(.+)\s*$/);
+    if (m) {
+      flush();
+      currentFile = (m[1] || '').trim();
+      continue;
+    }
+    buf.push(line);
+  }
+  flush();
+  return out;
+}
+
+function extractDtoLikeClassShapes(source, filePath = '') {
+  const out = [];
+  const src = String(source || '');
+  const isDtoFile = (filePath || '').includes('/Models/');
+
+  const classRegex = /\bpublic\s+(?:sealed\s+)?(?:partial\s+)?(class|record)\s+(\w+)\b[^{;]*\{/g;
+  let match;
+  while ((match = classRegex.exec(src)) !== null) {
+    const kind = match[1];
+    const name = match[2];
+    const start = match.index;
+    const openBrace = src.indexOf('{', start);
+    if (openBrace < 0) continue;
+
+    let depth = 1;
+    let i = openBrace + 1;
+    while (i < src.length && depth > 0) {
+      const c = src[i];
+      if (c === '{') depth++;
+      else if (c === '}') depth--;
+      i++;
+    }
+    const end = i;
+    if (end <= openBrace) continue;
+    const body = src.slice(openBrace + 1, end - 1);
+
+    const startLine = src.slice(0, start).split('\n').length;
+    const props = [];
+    const propRegex = /\bpublic\s+([\w<>\[\], ?]+)\s+(\w+)\s*\{\s*get;\s*(?:set;|init;)\s*\}/g;
+    let pm;
+    while ((pm = propRegex.exec(body)) !== null) {
+      const t = (pm[1] || '').replace(/\s+/g, ' ').trim();
+      const n = (pm[2] || '').trim();
+      props.push({ type: t, name: n });
+    }
+
+    // Only consider DTO-like shapes (reduces noise).
+    const isDtoName = /(Request|Response|Dto)$/i.test(name);
+    if (!isDtoFile && !isDtoName) continue;
+    if (props.length < 2) continue;
+
+    const shapeKey = props
+      .map((p) => `${p.type.replace(/\s+/g, '')}:${p.name}`)
+      .sort()
+      .join('|');
+
+    out.push({
+      file: filePath,
+      line: startLine,
+      kind,
+      name,
+      props,
+      shapeKey,
+    });
+  }
+  return out;
+}
+
+function extractDtoLikeClassShapesFromMainCode(mainCode) {
+  const lines = String(mainCode || '').split('\n');
+  let currentFile = '';
+  let buf = [];
+  const out = [];
+
+  const flush = () => {
+    if (buf.length === 0) return;
+    const chunk = buf.join('\n');
+    out.push(...extractDtoLikeClassShapes(chunk, currentFile || 'main_code.cs'));
+    buf = [];
+  };
+
+  for (const line of lines) {
+    const m = line.match(/^\s*\/\/\s*FILE:\s*(.+)\s*$/);
+    if (m) {
+      flush();
+      currentFile = (m[1] || '').trim();
+      continue;
+    }
+    buf.push(line);
+  }
+  flush();
+  return out;
+}
+
 function isPrBusinessMethodCandidate(m) {
   // Reliability-first: analyze user-created methods likely to contain migrated business logic.
   // Do NOT restrict to Services only; migrations can land in other folders during a sprint.
@@ -212,6 +372,107 @@ function firstHunkLine(parsedFile) {
 function fileBaseName(p) {
   const s = (p || '').replace(/\\/g, '/');
   return s.split('/').pop() || s;
+}
+
+function codeContextWindow(filePath, lineNumber, radius = 6) {
+  if (!filePath || !lineNumber) return { focusLine: '', context: '' };
+  const abs = path.join(repoRoot, filePath);
+  const content = readFileSafe(abs);
+  if (!content) return { focusLine: '', context: '' };
+  const lines = content.split('\n');
+  const idx = Math.max(0, Math.min(lines.length - 1, Number(lineNumber) - 1));
+  const start = Math.max(0, idx - radius);
+  const end = Math.min(lines.length - 1, idx + radius);
+  const ctx = [];
+  for (let i = start; i <= end; i++) {
+    const ln = i + 1;
+    ctx.push(`${ln}|${lines[i]}`);
+  }
+  return { focusLine: lines[idx] || '', context: ctx.join('\n') };
+}
+
+async function aiEnhanceCSharpLearningFinding(finding) {
+  const file = String(finding.file || '');
+  const line = Number(finding.line || 0);
+  const { focusLine, context } = codeContextWindow(file, line, 6);
+
+  const prompt = [
+    'You are a senior C# reviewer coaching a developer.',
+    'Given the code context and the highlighted line, write a short, crisp learning tip.',
+    '',
+    'Output MUST be strict JSON with keys:',
+    '- "explanation": string (max 220 chars)',
+    '- "directReplacement": boolean',
+    '- "replacementCode": string (optional, max 220 chars, 1-3 lines, no markdown fences)',
+    '- "cursorPrompt": string (optional, max 180 chars)',
+    '',
+    'Rules:',
+    '- Keep it friendly and specific to the code shown.',
+    '- Prefer modern C#/.NET idioms (C# 10+).',
+    '- If the improvement is a safe, local 1-3 line change, set directReplacement=true and provide replacementCode. Leave cursorPrompt empty.',
+    '- If the improvement needs broader refactor (e.g. StringBuilder across a block), set directReplacement=false and provide a high-level cursorPrompt. Omit replacementCode.',
+    '- Do NOT mention line numbers.',
+    '- Do NOT add markdown fences.',
+    '',
+    `Finding title: ${finding.title || ''}`,
+    `File: ${file}`,
+    `Highlighted line: ${focusLine}`,
+    '',
+    'Context (lineNumber|code):',
+    context || '(no context available)',
+  ].join('\n');
+
+  const completion = await openai.chat.completions.create({
+    model: CHAT_MODEL,
+    messages: [{ role: 'user', content: prompt }],
+    max_tokens: 220,
+  });
+
+  const raw = (completion.choices[0]?.message?.content || '').trim();
+  let obj;
+  try {
+    obj = JSON.parse(raw);
+  } catch {
+    // Fallback: keep deterministic text if model didn't comply.
+    return finding;
+  }
+
+  const explanation = String(obj.explanation || '').trim();
+  const directReplacement = Boolean(obj.directReplacement);
+  const replacementCode = String(obj.replacementCode || '').trim();
+  const cursorPrompt = String(obj.cursorPrompt || '').trim();
+
+  const replacementLines = replacementCode ? replacementCode.split('\n').filter((l) => l.trim().length > 0) : [];
+  const isReplacementShort = replacementCode.length > 0 && replacementCode.length <= 220 && replacementLines.length <= 3;
+  const allowReplacement = directReplacement && isReplacementShort;
+
+  const description = explanation || finding.description;
+
+  return {
+    ...finding,
+    description,
+    aiExplanation: explanation || finding.aiExplanation,
+    // For straightforward replacements, we show code directly and omit cursor prompt in PR comment rendering.
+    directReplacement: allowReplacement,
+    replacementCode: allowReplacement ? replacementCode : '',
+    cursorPrompt: allowReplacement ? '' : (cursorPrompt || finding.cursorPrompt),
+  };
+}
+
+async function aiEnhanceCSharpLearningFindings(findings) {
+  const enhanced = [];
+  for (const f of findings) {
+    if (f.type !== 'csharp-learning') {
+      enhanced.push(f);
+      continue;
+    }
+    try {
+      enhanced.push(await aiEnhanceCSharpLearningFinding(f));
+    } catch {
+      enhanced.push(f);
+    }
+  }
+  return enhanced;
 }
 
 function runProjectSpecificChecks(prDiffRaw, findings) {
@@ -823,18 +1084,18 @@ async function runSemanticDuplication(prMethods, mainMethods, findings) {
       }
       const similarity = cosineSimilarity(prEmbedding, mainEmbedding);
 
-      if (similarity < SIMILARITY_THRESHOLD) continue;
       if (!best || similarity > best.similarity) best = { mainMethod, similarity };
     }
 
     if (!best) continue;
+    if (best.similarity < SIMILARITY_THRESHOLD) continue;
 
     const { same, explanation } = await confirmSameBusinessLogicWithExplanation(prMethod.text, best.mainMethod.text);
     if (!same) continue;
 
     const suggestedAction = 'Consider reusing the existing method or moving shared logic to a common service.';
     const cursorPrompt = `Refactor this method to reuse the existing logic from ${best.mainMethod.name} while preserving current behavior.`;
-        findings.push(finding(
+    findings.push(finding(
       'semantic-duplication',
       'high',
       'Semantic Duplicate Detected',
@@ -844,16 +1105,139 @@ async function runSemanticDuplication(prMethods, mainMethods, findings) {
         line: prMethod.line || 0,
         method: prMethod.name,
         matchingMethod: best.mainMethod.name,
-            similarityScore: Math.round(best.similarity * 100) / 100,
-            similarityPercent: Math.round(best.similarity * 100),
-            thresholdUsed: SIMILARITY_THRESHOLD,
-            thresholdPercent: Math.round(SIMILARITY_THRESHOLD * 100),
+        matchingFile: best.mainMethod.file || '',
+        matchingLine: best.mainMethod.line || 0,
+        similarityScore: Math.round(best.similarity * 100) / 100,
+        similarityPercent: Math.round(best.similarity * 100),
+        thresholdUsed: SIMILARITY_THRESHOLD,
+        thresholdPercent: Math.round(SIMILARITY_THRESHOLD * 100),
         aiExplanation: explanation,
         suggestedAction,
         cursorPrompt,
       }
     ));
     console.log(`Finding: duplicate ${prMethod.name} <-> ${best.mainMethod.name} (${best.similarity.toFixed(2)})`);
+  }
+}
+
+function runDuplicateConstantChecks(prDiffRaw, mainCode, findings) {
+  const parsed = parseUnifiedDiff(prDiffRaw);
+
+  const mainConsts = extractCSharpConstantsFromMainCode(mainCode);
+  const byTypeAndValue = new Map();
+  for (const c of mainConsts) {
+    const key = `${c.type.replace(/\s+/g, '')}|${c.valueNormalized}`;
+    if (!byTypeAndValue.has(key)) byTypeAndValue.set(key, c);
+  }
+
+  let emitted = 0;
+  const maxFindings = 20;
+
+  for (const [file, info] of parsed.entries()) {
+    if (emitted >= maxFindings) break;
+    const norm = (file || '').replace(/\\/g, '/');
+    if (!norm.startsWith('modern-app/api/')) continue;
+    if (!norm.endsWith('.cs')) continue;
+
+    for (const dl of info.lines || []) {
+      if (emitted >= maxFindings) break;
+      if (dl.kind !== '+') continue;
+      const m = (dl.text || '').match(/\bconst\s+([\w<>\[\], ?]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+)\s*;/);
+      if (!m) continue;
+      const type = (m[1] || '').trim();
+      const name = (m[2] || '').trim();
+      const valueRaw = (m[3] || '').trim();
+      const valueNormalized = valueRaw.replace(/\s+/g, '');
+
+      const key = `${type.replace(/\s+/g, '')}|${valueNormalized}`;
+      const existing = byTypeAndValue.get(key);
+      if (!existing) continue;
+
+      // If it's the exact same constant name in the same file, don't flag.
+      if (existing.name === name && existing.file === norm) continue;
+
+      findings.push(finding(
+        'constant-duplication',
+        'medium',
+        'Duplicate constant value detected',
+        `Constant \`${name}\` duplicates an existing constant value (${type} = ${valueRaw}). Existing: \`${existing.name}\` in \`${existing.file}\`:${existing.line}.`,
+        {
+          file: norm,
+          line: dl.line || firstHunkLine(info),
+          method: '',
+          matchingFile: existing.file,
+          matchingLine: existing.line,
+          matchingConstant: existing.name,
+          suggestedAction: 'Reuse the existing constant or move shared constants into a common location.',
+          cursorPrompt: `Replace ${name} with reuse of ${existing.name} (or centralize constants) and update references.`,
+        }
+      ));
+      emitted++;
+    }
+  }
+}
+
+function runDtoShapeDuplicationChecks(prDiffRaw, mainCode, findings) {
+  const parsed = parseUnifiedDiff(prDiffRaw);
+
+  // Collect class declaration lines that are present in the diff (so comments can anchor reliably).
+  const classAnchorsByFile = new Map();
+  for (const [file, info] of parsed.entries()) {
+    const norm = (file || '').replace(/\\/g, '/');
+    if (!norm.startsWith('modern-app/api/')) continue;
+    if (!norm.endsWith('.cs')) continue;
+
+    for (const dl of info.lines || []) {
+      if (dl.kind !== '+') continue;
+      const m = (dl.text || '').match(/^\s*public\s+(?:sealed\s+)?(?:partial\s+)?(?:class|record)\s+(\w+)\b/);
+      if (!m) continue;
+      if (!classAnchorsByFile.has(norm)) classAnchorsByFile.set(norm, new Set());
+      classAnchorsByFile.get(norm).add(dl.line || firstHunkLine(info));
+    }
+  }
+
+  const mainDtos = extractDtoLikeClassShapesFromMainCode(mainCode);
+  const byShape = new Map();
+  for (const d of mainDtos) {
+    if (!byShape.has(d.shapeKey)) byShape.set(d.shapeKey, d);
+  }
+
+  let emitted = 0;
+  const maxFindings = 10;
+
+  for (const [file, anchors] of classAnchorsByFile.entries()) {
+    if (emitted >= maxFindings) break;
+    const abs = path.join(repoRoot, file);
+    const src = readFileSafe(abs);
+    if (!src) continue;
+
+    const prDtos = extractDtoLikeClassShapes(src, file);
+    for (const d of prDtos) {
+      if (emitted >= maxFindings) break;
+      if (!anchors.has(d.line)) continue;
+
+      const existing = byShape.get(d.shapeKey);
+      if (!existing) continue;
+      if (existing.name === d.name) continue;
+
+      const propsList = d.props.map((p) => `${p.type} ${p.name}`).join(', ');
+      findings.push(finding(
+        'dto-shape-duplication',
+        'medium',
+        'DTO shape duplicate detected',
+        `DTO \`${d.name}\` has the same property shape as existing \`${existing.name}\` in \`${existing.file}\`:${existing.line}. Properties: ${propsList}.`,
+        {
+          file,
+          line: d.line,
+          matchingFile: existing.file,
+          matchingLine: existing.line,
+          matchingType: existing.name,
+          suggestedAction: 'Reuse the existing DTO type or consolidate to a single shared model and map at boundaries.',
+          cursorPrompt: `Replace ${d.name} with reuse of ${existing.name} (or consolidate DTOs) and update references/mappings.`,
+        }
+      ));
+      emitted++;
+    }
   }
 }
 
@@ -907,7 +1291,7 @@ async function main() {
     prMethods.push(...extractCSharpMethods(prCode, ''));
   }
 
-  const mainMethods = extractCSharpMethods(mainCode, 'main_code.cs');
+  const mainMethods = extractCSharpMethodsFromMainCode(mainCode);
 
   const prBusinessMethods = prMethods.filter(isPrBusinessMethodCandidate);
   const mainBusinessMethods = mainMethods.filter(isMainBusinessMethodCandidate);
@@ -933,9 +1317,16 @@ async function main() {
   // Project-specific checks (no LLM required; reliability-first, diff-anchored where possible)
   runProjectSpecificChecks(prDiffRaw, findings);
 
+  // Additional semantic duplication types (deterministic; no LLM required)
+  runDuplicateConstantChecks(prDiffRaw, mainCode, findings);
+  runDtoShapeDuplicationChecks(prDiffRaw, mainCode, findings);
+
+  // AI enhancement for C# learning tips (tailored + future-proof explanation)
+  const enhancedFindings = await aiEnhanceCSharpLearningFindings(findings);
+
   const outPath = path.isAbsolute(findingsOutput) ? findingsOutput : path.resolve(process.cwd(), findingsOutput);
-  fs.writeFileSync(outPath, JSON.stringify(findings, null, 2));
-  console.log(`Wrote ${findings.length} finding(s) to ${outPath}`);
+  fs.writeFileSync(outPath, JSON.stringify(enhancedFindings, null, 2));
+  console.log(`Wrote ${enhancedFindings.length} finding(s) to ${outPath}`);
 }
 
 main().catch((err) => {

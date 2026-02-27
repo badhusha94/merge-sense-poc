@@ -156,13 +156,44 @@ function formatCommentBody(f) {
     : (f.thresholdUsed != null ? Math.round(Number(f.thresholdUsed) * 100) : null);
 
   if (f.type === 'semantic-duplication' && f.matchingMethod) {
+    const matchLoc = f.matchingFile
+      ? ` (${f.matchingFile}${typeof f.matchingLine === 'number' && f.matchingLine > 0 ? `:${f.matchingLine}` : ''})`
+      : '';
     return (
       `**Semantic duplicate** (similarity ${similarityPct != null ? `${similarityPct}%` : '—'}, threshold **${thresholdPct != null ? `${thresholdPct}%` : '—'}**)\n` +
-      `Duplicates logic from \`${f.matchingMethod}\`. ${(f.aiExplanation || f.description || '').slice(0, 120)}…\n\n` +
+      `Duplicates logic from \`${f.matchingMethod}\`${matchLoc}. ${(f.aiExplanation || f.description || '').slice(0, 120)}…\n\n` +
       `**Action:** Reuse \`${f.matchingMethod}\` or extract shared logic.\n` +
       `**Cursor prompt:** \`${f.cursorPrompt || 'Refactor to reuse existing logic.'}\``
     );
   }
+
+  if (f.type === 'csharp-learning') {
+    const title = f.title || 'C# tip';
+    const desc = (f.aiExplanation || f.description || '').trim();
+    const replacement = String(f.replacementCode || '').trim();
+    const direct = Boolean(f.directReplacement) && replacement.length > 0;
+
+    let body = `**${title}**\n`;
+    if (desc) body += `${desc}\n`;
+
+    if (direct) {
+      const lines = replacement.split('\n').filter((l) => l.trim().length > 0);
+      if (lines.length <= 1) {
+        body += `\n**Replace with:** \`${replacement}\`\n`;
+      } else {
+        body += `\n**Replace with:**\n\`\`\`csharp\n${replacement}\n\`\`\`\n`;
+      }
+      // Intentionally omit cursor prompt for direct replacements.
+      return body.trim();
+    }
+
+    const action = (f.suggestedAction || '').trim();
+    const cursor = (f.cursorPrompt || '').trim();
+    if (action) body += `\n**Action:** ${action}\n`;
+    if (cursor) body += `**Cursor prompt:** \`${cursor}\`\n`;
+    return body.trim();
+  }
+
   const title = f.title || f.type || 'Finding';
   const desc = (f.description || f.aiExplanation || '').trim();
   const action = (f.suggestedAction || '').trim();
