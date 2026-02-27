@@ -4,6 +4,7 @@ builder.Services.AddControllers();
 builder.Services.AddScoped<ModernApi.Services.PremiumService>();
 builder.Services.AddScoped<ModernApi.Services.QuoteService>();
 builder.Services.AddScoped<ModernApi.Services.BillingService>();
+builder.Services.AddScoped<ModernApi.Services.ValidationService>();
 
 var app = builder.Build();
 
