@@ -22,14 +22,14 @@ const prDiffFile = process.env.PR_DIFF_FILE || 'pr.diff';
 const mainCodeFile = process.env.MAIN_CODE_FILE || 'main_code.cs';
 const findingsOutput = process.env.FINDINGS_OUTPUT || 'findings.json';
 const repoRoot = process.env.GITHUB_WORKSPACE || path.resolve(process.cwd(), '..');
-const apiKey = process.env.OPENAI_API_KEY;
+const apiKey = process.env.OPENAI_API_KEY || '';
+const aiEnabled = Boolean(apiKey && apiKey.trim().length > 0);
 
-if (!apiKey) {
-  console.error('OPENAI_API_KEY is required.');
-  process.exit(1);
+if (!aiEnabled) {
+  console.warn('OPENAI_API_KEY not set; running deterministic checks only (skipping LLM/embedding checks).');
 }
 
-const openai = new OpenAI({ apiKey });
+const openai = aiEnabled ? new OpenAI({ apiKey }) : null;
 
 /** Load .ai/review-rules.json; return { layers } with only non-placeholder checks. */
 function loadReviewRules() {
@@ -392,6 +392,7 @@ function codeContextWindow(filePath, lineNumber, radius = 6) {
 }
 
 async function aiEnhanceCSharpLearningFinding(finding) {
+  if (!aiEnabled || !openai) return finding;
   const file = String(finding.file || '');
   const line = Number(finding.line || 0);
   const { focusLine, context } = codeContextWindow(file, line, 6);
@@ -460,6 +461,7 @@ async function aiEnhanceCSharpLearningFinding(finding) {
 }
 
 async function aiEnhanceCSharpLearningFindings(findings) {
+  if (!aiEnabled || !openai) return findings;
   const enhanced = [];
   for (const f of findings) {
     if (f.type !== 'csharp-learning') {
@@ -996,6 +998,7 @@ function runProjectSpecificChecks(prDiffRaw, findings) {
 }
 
 async function getEmbedding(text) {
+  if (!aiEnabled || !openai) throw new Error('OpenAI client not configured');
   const { data } = await openai.embeddings.create({
     model: EMBEDDING_MODEL,
     input: text.slice(0, 8000),
@@ -1005,6 +1008,7 @@ async function getEmbedding(text) {
 
 /** Confirm same business logic and get explanation. Returns { same, explanation }. */
 async function confirmSameBusinessLogicWithExplanation(methodA, methodB) {
+  if (!aiEnabled || !openai) return { same: false, explanation: 'OpenAI client not configured.' };
   const prompt = loadPrompt('semantic-duplication', {
     METHOD_A: methodA,
     METHOD_B: methodB,
@@ -1025,6 +1029,7 @@ async function confirmSameBusinessLogicWithExplanation(methodA, methodB) {
 
 /** Check if modified method may have altered business logic. Returns { altered, explanation }. */
 async function checkLogicSafety(oldMethodText, newMethodText) {
+  if (!aiEnabled || !openai) return { altered: false, explanation: 'OpenAI client not configured.' };
   const prompt = loadPrompt('logic-safety', {
     OLD_METHOD: oldMethodText,
     NEW_METHOD: newMethodText,
@@ -1117,6 +1122,60 @@ async function runSemanticDuplication(prMethods, mainMethods, findings) {
       }
     ));
     console.log(`Finding: duplicate ${prMethod.name} <-> ${best.mainMethod.name} (${best.similarity.toFixed(2)})`);
+  }
+}
+
+async function runIntraPrSemanticDuplication(prMethods, findings) {
+  if (prMethods.length < 2) return;
+
+  const embeddings = new Array(prMethods.length);
+  for (let i = 0; i < prMethods.length; i++) {
+    embeddings[i] = await getEmbedding(prMethods[i].text);
+  }
+
+  for (let i = 0; i < prMethods.length; i++) {
+    const a = prMethods[i];
+    let best = null;
+
+    for (let j = i + 1; j < prMethods.length; j++) {
+      const b = prMethods[j];
+      if (!a?.text || !b?.text) continue;
+      if ((a.file || '') === (b.file || '') && (a.name || '') === (b.name || '')) continue;
+      const similarity = cosineSimilarity(embeddings[i], embeddings[j]);
+      if (!best || similarity > best.similarity) best = { b, similarity };
+    }
+
+    if (!best) continue;
+    if (best.similarity < SIMILARITY_THRESHOLD) continue;
+
+    const { same, explanation } = await confirmSameBusinessLogicWithExplanation(a.text, best.b.text);
+    if (!same) continue;
+
+    const suggestedAction = 'Consolidate duplicated logic: keep one implementation and reuse it from the other call sites.';
+    const cursorPrompt = `Consolidate this logic with ${best.b.name} (extract shared helper / reuse one method) while preserving behavior.`;
+    findings.push(finding(
+      'semantic-duplication',
+      'high',
+      'Intra-PR Semantic Duplicate Detected',
+      explanation,
+      {
+        file: a.file || '',
+        line: a.line || 0,
+        method: a.name,
+        matchingMethod: best.b.name,
+        matchingFile: best.b.file || '',
+        matchingLine: best.b.line || 0,
+        intraPr: true,
+        similarityScore: Math.round(best.similarity * 100) / 100,
+        similarityPercent: Math.round(best.similarity * 100),
+        thresholdUsed: SIMILARITY_THRESHOLD,
+        thresholdPercent: Math.round(SIMILARITY_THRESHOLD * 100),
+        aiExplanation: explanation,
+        suggestedAction,
+        cursorPrompt,
+      }
+    ));
+    console.log(`Finding: intra-pr duplicate ${a.name} <-> ${best.b.name} (${best.similarity.toFixed(2)})`);
   }
 }
 
@@ -1300,18 +1359,21 @@ async function main() {
     console.log('No baseline (main) business methods found after filtering; semantic duplication cannot be detected.');
   }
 
-  if (prBusinessMethods.length === 0) {
-    console.log('No C# methods found in PR diff / code. Skipping AI review.');
-    const outPath = path.isAbsolute(findingsOutput) ? findingsOutput : path.resolve(process.cwd(), findingsOutput);
-    fs.writeFileSync(outPath, JSON.stringify([], null, 2));
-    return;
-  }
-
-  console.log(`PR methods: ${prBusinessMethods.length}, Main methods: ${mainBusinessMethods.length}. Running: ${coreChecks.join(', ')}`);
   const findings = [];
 
-  if (coreChecks.includes('semantic-duplication')) {
+  if (prBusinessMethods.length === 0) {
+    console.log('No C# methods found in PR diff / code. Skipping AI checks; running deterministic checks only.');
+  } else {
+    console.log(`PR methods: ${prBusinessMethods.length}, Main methods: ${mainBusinessMethods.length}. Running: ${coreChecks.join(', ')}`);
+  }
+
+  if (aiEnabled && prBusinessMethods.length > 0 && coreChecks.includes('semantic-duplication')) {
     await runSemanticDuplication(prBusinessMethods, mainBusinessMethods, findings);
+    await runIntraPrSemanticDuplication(prBusinessMethods, findings);
+  }
+
+  if (aiEnabled && prBusinessMethods.length > 0 && coreChecks.includes('logic-safety')) {
+    await runLogicSafety(prBusinessMethods, mainBusinessMethods, findings);
   }
 
   // Project-specific checks (no LLM required; reliability-first, diff-anchored where possible)

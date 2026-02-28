@@ -24,30 +24,37 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch origin main 2>/dev/null || true
+          BASE_BRANCH="${{ github.base_ref }}"
+          if [ -z "${BASE_BRANCH}" ]; then BASE_BRANCH="main"; fi
+          echo "BASE_BRANCH=${BASE_BRANCH}" >> "$GITHUB_ENV"
+
+          git fetch origin "${BASE_BRANCH}" 2>/dev/null || true
           # Reliability-first: run review when API code or scripts changed.
-          CHANGED=$(git diff --name-only origin/main...HEAD -- "modern-app/api/**" "modern-app/scripts/**" | wc -l | tr -d ' ')
+          CHANGED_FILES="$(git diff --name-only "origin/${BASE_BRANCH}...HEAD" -- modern-app/api modern-app/scripts || true)"
+          CHANGED="$(echo "${CHANGED_FILES}" | sed '/^\s*$/d' | wc -l | tr -d ' ')"
           if [ "${CHANGED}" = "0" ]; then
             echo "run_review=false" >> "$GITHUB_OUTPUT"
             echo "No changes under modern-app/api/** or modern-app/scripts/**; skipping AI review."
           else
             echo "run_review=true" >> "$GITHUB_OUTPUT"
+            echo "Changed files:"
+            echo "${CHANGED_FILES}"
           fi
 
       - name: Get diff vs main
         if: steps.filter.outputs.run_review == 'true'
         run: |
-          git fetch origin main 2>/dev/null || true
-          git diff origin/main...HEAD -- "modern-app/api/**" "modern-app/scripts/**" > pr.diff || true
+          git fetch origin "${BASE_BRANCH}" 2>/dev/null || true
+          git diff "origin/${BASE_BRANCH}...HEAD" -- modern-app/api modern-app/scripts > pr.diff || true
           echo "PR_DIFF_FILE=${{ github.workspace }}/pr.diff" >> $GITHUB_ENV
 
       - name: Extract C# from main branch
         if: steps.filter.outputs.run_review == 'true'
         run: |
           touch main_code.cs
-          for f in $(git ls-tree -r origin/main --name-only 2>/dev/null | grep '\.cs$' | grep 'modern-app/api/'); do
+          for f in $(git ls-tree -r "origin/${BASE_BRANCH}" --name-only 2>/dev/null | grep '\.cs$' | grep 'modern-app/api/'); do
             echo "// FILE: $f" >> main_code.cs
-            git show "origin/main:$f" 2>/dev/null >> main_code.cs || true
+            git show "origin/${BASE_BRANCH}:$f" 2>/dev/null >> main_code.cs || true
             echo "" >> main_code.cs
           done
           echo "MAIN_CODE_FILE=${{ github.workspace }}/main_code.cs" >> $GITHUB_ENV
