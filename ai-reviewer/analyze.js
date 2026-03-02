@@ -1025,7 +1025,6 @@ async function confirmSameBusinessLogicWithExplanation(methodA, methodB) {
     model: CHAT_MODEL,
     messages: [{ role: 'user', content: prompt }],
     max_completion_tokens: 400,
-    temperature: 0.1,
   });
   const content = (completion.choices[0]?.message?.content || '').trim();
   const lines = content.split('\n').map((l) => l.trim()).filter(Boolean);
