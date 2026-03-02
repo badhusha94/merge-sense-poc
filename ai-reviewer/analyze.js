@@ -423,18 +423,23 @@ async function aiEnhanceCSharpLearningFinding(finding) {
     context || '(no context available)',
   ].join('\n');
 
-  const completion = await openai.chat.completions.create({
-    model: CHAT_MODEL,
-    messages: [{ role: 'user', content: prompt }],
-    max_completion_tokens: 220,
-  });
+  let raw;
+  try {
+    const completion = await openai.chat.completions.create({
+      model: CHAT_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      max_completion_tokens: 400,
+    });
+    raw = (completion.choices[0]?.message?.content || '').trim();
+  } catch (err) {
+    console.error(`  [WARN] LLM call failed for learning-enhancement: ${err.message}`);
+    return finding;
+  }
 
-  const raw = (completion.choices[0]?.message?.content || '').trim();
   let obj;
   try {
     obj = JSON.parse(raw);
   } catch {
-    // Fallback: keep deterministic text if model didn't comply.
     return finding;
   }
 
@@ -1021,17 +1026,22 @@ async function confirmSameBusinessLogicWithExplanation(methodA, methodB) {
     METHOD_B: methodB,
   }) || `Determine if these two C# methods implement the SAME business logic. Reply with two lines: first YES or NO, second a brief explanation.\n\nMethod A:\n${methodA}\n\nMethod B:\n${methodB}`;
 
-  const completion = await openai.chat.completions.create({
-    model: CHAT_MODEL,
-    messages: [{ role: 'user', content: prompt }],
-    max_completion_tokens: 400,
-  });
-  const content = (completion.choices[0]?.message?.content || '').trim();
-  const lines = content.split('\n').map((l) => l.trim()).filter(Boolean);
-  const first = (lines[0] || '').toUpperCase();
-  const same = first.startsWith('YES');
-  const explanation = lines.slice(1).join(' ').trim() || (same ? 'Methods implement the same business logic.' : 'Different logic.');
-  return { same, explanation };
+  try {
+    const completion = await openai.chat.completions.create({
+      model: CHAT_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      max_completion_tokens: 800,
+    });
+    const content = (completion.choices[0]?.message?.content || '').trim();
+    const lines = content.split('\n').map((l) => l.trim()).filter(Boolean);
+    const first = (lines[0] || '').toUpperCase();
+    const same = first.startsWith('YES');
+    const explanation = lines.slice(1).join(' ').trim() || (same ? 'Methods implement the same business logic.' : 'Different logic.');
+    return { same, explanation };
+  } catch (err) {
+    console.error(`  [WARN] LLM call failed for semantic-duplication check: ${err.message}`);
+    return { same: false, explanation: `LLM call failed: ${err.message}` };
+  }
 }
 
 /** Check if modified method may have altered business logic. Returns { altered, explanation }. */
@@ -1043,16 +1053,21 @@ async function checkLogicSafety(oldMethodText, newMethodText) {
   });
   if (!prompt) throw new Error('prompts/logic-safety.txt not found');
 
-  const completion = await openai.chat.completions.create({
-    model: CHAT_MODEL,
-    messages: [{ role: 'user', content: prompt }],
-    max_completion_tokens: 100,
-  });
-  const content = (completion.choices[0]?.message?.content || '').trim();
-  const first = (content.split('\n')[0] || '').trim().toUpperCase();
-  const altered = first.startsWith('YES');
-  const explanation = content.split('\n').slice(1).join(' ').trim() || (altered ? 'Business rules or calculations may have been changed.' : 'Behavior appears preserved.');
-  return { altered, explanation };
+  try {
+    const completion = await openai.chat.completions.create({
+      model: CHAT_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      max_completion_tokens: 300,
+    });
+    const content = (completion.choices[0]?.message?.content || '').trim();
+    const first = (content.split('\n')[0] || '').trim().toUpperCase();
+    const altered = first.startsWith('YES');
+    const explanation = content.split('\n').slice(1).join(' ').trim() || (altered ? 'Business rules or calculations may have been changed.' : 'Behavior appears preserved.');
+    return { altered, explanation };
+  } catch (err) {
+    console.error(`  [WARN] LLM call failed for logic-safety check: ${err.message}`);
+    return { altered: false, explanation: `LLM call failed: ${err.message}` };
+  }
 }
 
 function readFileSafe(filePath) {
