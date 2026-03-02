@@ -13,8 +13,8 @@ import cosineSimilarity from 'cosine-similarity';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Project policy: any similarity >= 70% should be refactored.
-const SIMILARITY_THRESHOLD = 0.70;
+// Project policy: any similarity >= 50% should be refactored.
+const SIMILARITY_THRESHOLD = 0.50;
 const EMBEDDING_MODEL = 'text-embedding-3-small';
 const CHAT_MODEL = 'gpt-4o-mini';
 
