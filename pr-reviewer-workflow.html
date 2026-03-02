@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MergeSense — PR Reviewer Workflow</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --accent: #58a6ff;
+    --accent-glow: rgba(88,166,255,.18);
+    --green: #3fb950;
+    --green-glow: rgba(63,185,80,.18);
+    --orange: #d29922;
+    --orange-glow: rgba(210,153,34,.18);
+    --purple: #bc8cff;
+    --purple-glow: rgba(188,140,255,.18);
+    --red: #f85149;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --radius: 12px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 2rem;
+  }
+
+  h1 {
+    text-align: center;
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: .25rem;
+    background: linear-gradient(135deg, var(--accent), var(--purple));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .subtitle {
+    text-align: center;
+    color: var(--muted);
+    font-size: .95rem;
+    margin-bottom: 2.5rem;
+  }
+
+  /* ── Layout ── */
+  .workflow {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  /* ── Swim-lane labels ── */
+  .lane {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    gap: 1rem;
+    align-items: start;
+  }
+
+  .lane-label {
+    writing-mode: horizontal-tb;
+    font-size: .7rem;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    color: var(--muted);
+    padding: 1rem .5rem;
+    border-right: 2px solid var(--border);
+    text-align: right;
+    min-height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+  }
+
+  .lane-content {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .75rem;
+    padding: .75rem 0;
+    align-items: flex-start;
+  }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem 1.15rem;
+    position: relative;
+    transition: transform .15s, box-shadow .15s;
+    cursor: default;
+    max-width: 280px;
+    min-width: 200px;
+    flex: 1;
+  }
+
+  .card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 24px rgba(0,0,0,.35);
+  }
+
+  .card .tag {
+    display: inline-block;
+    font-size: .6rem;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-bottom: .5rem;
+    font-weight: 600;
+  }
+
+  .card h3 {
+    font-size: .9rem;
+    font-weight: 600;
+    margin-bottom: .35rem;
+  }
+
+  .card p {
+    font-size: .78rem;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  /* tag colour variants */
+  .tag-trigger  { background: var(--accent-glow);  color: var(--accent); }
+  .tag-auto     { background: var(--green-glow);   color: var(--green); }
+  .tag-ai       { background: var(--purple-glow);  color: var(--purple); }
+  .tag-human    { background: var(--orange-glow);   color: var(--orange); }
+  .tag-output   { background: rgba(139,148,158,.15); color: var(--muted); }
+
+  /* ── Connector arrows between lanes ── */
+  .arrow-row {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    gap: 1rem;
+  }
+
+  .arrow-row .spacer { }
+
+  .arrow-track {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .arrow-track svg {
+    display: block;
+  }
+
+  /* ── Section dividers ── */
+  .section-divider {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    gap: 1rem;
+    margin: 1rem 0;
+  }
+
+  .section-divider .line {
+    border-top: 1px dashed var(--border);
+    align-self: center;
+  }
+
+  .section-divider .label {
+    font-size: .7rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    text-align: center;
+    align-self: center;
+    padding: .25rem .75rem;
+    background: var(--bg);
+    border: 1px dashed var(--border);
+    border-radius: 20px;
+    white-space: nowrap;
+  }
+
+  /* ── Legend ── */
+  .legend {
+    display: flex;
+    justify-content: center;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    margin-top: 2.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+    font-size: .75rem;
+    color: var(--muted);
+  }
+
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+  }
+
+  /* ── Alternate flow section ── */
+  .alt-flow {
+    margin-top: 2.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    background: var(--surface);
+  }
+
+  .alt-flow h2 {
+    font-size: 1.1rem;
+    margin-bottom: .25rem;
+    color: var(--orange);
+  }
+
+  .alt-flow .alt-subtitle {
+    font-size: .8rem;
+    color: var(--muted);
+    margin-bottom: 1.25rem;
+  }
+
+  .alt-steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .75rem;
+  }
+
+  .alt-steps .card {
+    min-width: 160px;
+  }
+
+  /* ── Checks grid ── */
+  .checks-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: .75rem;
+    width: 100%;
+  }
+
+  .check-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: .75rem 1rem;
+  }
+
+  .check-item h4 {
+    font-size: .8rem;
+    font-weight: 600;
+    margin-bottom: .25rem;
+  }
+
+  .check-item p {
+    font-size: .72rem;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+
+  .check-item .badge {
+    display: inline-block;
+    font-size: .58rem;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    padding: 1px 6px;
+    border-radius: 3px;
+    margin-bottom: .35rem;
+    font-weight: 600;
+  }
+
+  .badge-ai   { background: var(--purple-glow); color: var(--purple); }
+  .badge-rule { background: var(--green-glow);  color: var(--green); }
+
+  /* ── Responsive ── */
+  @media (max-width: 700px) {
+    .lane { grid-template-columns: 1fr; }
+    .lane-label { writing-mode: horizontal-tb; border-right: none; border-bottom: 2px solid var(--border); text-align: left; justify-content: flex-start; min-height: auto; padding: .5rem; }
+    .arrow-row { grid-template-columns: 1fr; }
+    .section-divider { grid-template-columns: 1fr; }
+    .card { max-width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<h1>MergeSense PR Reviewer</h1>
+<p class="subtitle">High-Level Workflow — AI-Powered Code Review &amp; Refactor Pipeline</p>
+
+<div class="workflow">
+
+  <!-- ─── TRIGGER ─── -->
+  <div class="lane">
+    <div class="lane-label">Trigger</div>
+    <div class="lane-content">
+      <div class="card">
+        <span class="tag tag-trigger">Trigger</span>
+        <h3>Pull Request Opened / Updated</h3>
+        <p>A PR targeting <code>main</code> is opened, synchronized, or manually dispatched.</p>
+      </div>
+      <div class="card">
+        <span class="tag tag-auto">Filter</span>
+        <h3>Path Filter</h3>
+        <p>Only proceeds when changes touch <code>modern-app/api/**</code> or <code>modern-app/scripts/**</code>.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- arrow -->
+  <div class="arrow-row">
+    <div class="spacer"></div>
+    <div class="arrow-track">
+      <svg width="24" height="36" viewBox="0 0 24 36"><path d="M12 0 L12 28 M6 22 L12 28 L18 22" stroke="#30363d" stroke-width="2" fill="none"/></svg>
+    </div>
+  </div>
+
+  <!-- ─── PREPARATION ─── -->
+  <div class="lane">
+    <div class="lane-label">Preparation</div>
+    <div class="lane-content">
+      <div class="card">
+        <span class="tag tag-auto">Automated</span>
+        <h3>Build PR Diff</h3>
+        <p>Generates <code>pr.diff</code> comparing the PR branch against <code>main</code>.</p>
+      </div>
+      <div class="card">
+        <span class="tag tag-auto">Automated</span>
+        <h3>Collect Main Codebase</h3>
+        <p>Concatenates all <code>modern-app/api/**/*.cs</code> from the base branch into <code>main_code.cs</code>.</p>
+      </div>
+      <div class="card">
+        <span class="tag tag-auto">Automated</span>
+        <h3>Load Review Rules</h3>
+        <p>Reads <code>.ai/review-rules.json</code> for active check layers and thresholds.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- arrow -->
+  <div class="arrow-row">
+    <div class="spacer"></div>
+    <div class="arrow-track">
+      <svg width="24" height="36" viewBox="0 0 24 36"><path d="M12 0 L12 28 M6 22 L12 28 L18 22" stroke="#30363d" stroke-width="2" fill="none"/></svg>
+    </div>
+  </div>
+
+  <!-- ─── ANALYSIS ─── -->
+  <div class="lane">
+    <div class="lane-label">Analysis</div>
+    <div class="lane-content">
+      <div class="card">
+        <span class="tag tag-ai">AI Engine</span>
+        <h3>Run <code>analyze.js</code></h3>
+        <p>Core analysis engine processes the diff and main code through multiple review layers.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Section: checks detail -->
+  <div class="section-divider">
+    <div class="spacer"></div>
+    <div class="label">Review Checks Performed</div>
+  </div>
+
+  <div class="lane">
+    <div class="lane-label">Checks</div>
+    <div class="lane-content" style="flex-direction:column;">
+      <div class="checks-grid">
+        <div class="check-item">
+          <span class="badge badge-ai">AI — Embeddings + LLM</span>
+          <h4>Semantic Duplication</h4>
+          <p>Compares PR methods to main via embeddings (≥50% similarity) with LLM confirmation.</p>
+        </div>
+        <div class="check-item">
+          <span class="badge badge-ai">AI — Embeddings + LLM</span>
+          <h4>Intra-PR Duplication</h4>
+          <p>Detects duplicate logic within the PR's own changed files.</p>
+        </div>
+        <div class="check-item">
+          <span class="badge badge-ai">AI — LLM</span>
+          <h4>Logic Safety</h4>
+          <p>Flags changes that may alter existing business logic in modified methods.</p>
+        </div>
+        <div class="check-item">
+          <span class="badge badge-rule">Deterministic</span>
+          <h4>Script Rules</h4>
+          <p>Jira ticket in filename, developer header, DB naming prefixes, indexes for new tables.</p>
+        </div>
+        <div class="check-item">
+          <span class="badge badge-rule">Deterministic</span>
+          <h4>C# Rules</h4>
+          <p>ApiController attribute, versioned routes, ALL_CAPS constants, no Console, AuthFilter, etc.</p>
+        </div>
+        <div class="check-item">
+          <span class="badge badge-rule">Deterministic</span>
+          <h4>Constant &amp; DTO Duplication</h4>
+          <p>Same constant values or DTO property shapes appearing across the codebase.</p>
+        </div>
+        <div class="check-item">
+          <span class="badge badge-ai">AI + Deterministic</span>
+          <h4>C# Learning Tips</h4>
+          <p>Suggests modern C# idioms — string interpolation, records, pattern matching, etc.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- arrow -->
+  <div class="arrow-row">
+    <div class="spacer"></div>
+    <div class="arrow-track">
+      <svg width="24" height="36" viewBox="0 0 24 36"><path d="M12 0 L12 28 M6 22 L12 28 L18 22" stroke="#30363d" stroke-width="2" fill="none"/></svg>
+    </div>
+  </div>
+
+  <!-- ─── OUTPUT ─── -->
+  <div class="lane">
+    <div class="lane-label">Output</div>
+    <div class="lane-content">
+      <div class="card">
+        <span class="tag tag-output">Output</span>
+        <h3>Generate <code>findings.json</code></h3>
+        <p>Structured findings with type, severity, title, description, file, line, and cursor prompt.</p>
+      </div>
+      <div class="card">
+        <span class="tag tag-auto">Automated</span>
+        <h3>Post PR Comments</h3>
+        <p><code>post-pr-comments.js</code> publishes each finding as an inline review comment on the PR.</p>
+      </div>
+      <div class="card">
+        <span class="tag tag-trigger">Hint</span>
+        <h3>Suggest Refactor</h3>
+        <p>Adds a comment inviting the developer to run <code>/ai-apply-refactor</code> if findings exist.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- arrow -->
+  <div class="arrow-row">
+    <div class="spacer"></div>
+    <div class="arrow-track">
+      <svg width="24" height="36" viewBox="0 0 24 36"><path d="M12 0 L12 28 M6 22 L12 28 L18 22" stroke="#30363d" stroke-width="2" fill="none"/></svg>
+    </div>
+  </div>
+
+  <!-- ─── DEVELOPER ─── -->
+  <div class="lane">
+    <div class="lane-label">Developer</div>
+    <div class="lane-content">
+      <div class="card">
+        <span class="tag tag-human">Human</span>
+        <h3>Review Findings</h3>
+        <p>Developer reads inline comments, decides whether to fix manually or invoke AI refactor.</p>
+      </div>
+      <div class="card" style="border-color: var(--orange);">
+        <span class="tag tag-human">Decision</span>
+        <h3>Fix Manually or Invoke AI?</h3>
+        <p>Comment <code>/ai-apply-refactor</code> on the PR to trigger the automated refactor pipeline.</p>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ════════════════════════════════════════════════ -->
+<!-- ALTERNATE FLOW: AI REFACTOR                     -->
+<!-- ════════════════════════════════════════════════ -->
+
+<div style="max-width:1100px;margin:0 auto;">
+  <div class="alt-flow">
+    <h2>Alternate Flow — AI Apply Refactor</h2>
+    <p class="alt-subtitle">Triggered when a developer comments <code>/ai-apply-refactor</code> on the PR</p>
+
+    <div class="alt-steps">
+      <div class="card">
+        <span class="tag tag-trigger">Trigger</span>
+        <h3>Comment Detected</h3>
+        <p><code>/ai-apply-refactor</code> comment on the PR triggers <code>ai-apply-refactor.yml</code>.</p>
+      </div>
+      <div class="card">
+        <span class="tag tag-human">Gate</span>
+        <h3>Human Approval</h3>
+        <p>Requires approval via the <code>refactor-approval</code> GitHub environment before proceeding.</p>
+      </div>
+      <div class="card">
+        <span class="tag tag-ai">AI Engine</span>
+        <h3>Re-analyze &amp; Apply</h3>
+        <p>Runs <code>analyze.js</code> for fresh findings, then <code>apply-refactor.js</code> to generate fixes via OpenAI.</p>
+      </div>
+      <div class="card">
+        <span class="tag tag-auto">Automated</span>
+        <h3>Commit &amp; Push</h3>
+        <p>Refactored files are committed and pushed to the PR branch automatically.</p>
+      </div>
+      <div class="card">
+        <span class="tag tag-auto">Automated</span>
+        <h3>Re-trigger Review</h3>
+        <p>Dispatches <code>ai-review.yml</code> on the updated branch so checks run again end-to-end.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Legend ── -->
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:var(--accent);"></div> Trigger / Event</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--green);"></div> Automated Step</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--purple);"></div> AI-Powered</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--orange);"></div> Human Action</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--muted);"></div> Output / Artifact</div>
+  </div>
+
+  <p style="text-align:center;color:var(--muted);font-size:.7rem;margin-top:1.5rem;">
+    MergeSense POC &bull; AI Reviewer Workflow &bull; Components: GitHub Actions &middot; Node.js (analyze.js) &middot; OpenAI (text-embedding-3-small &amp; gpt-4o-mini)
+  </p>
+</div>
+
+</body>
+</html>
