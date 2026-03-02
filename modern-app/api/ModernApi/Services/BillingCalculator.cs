@@ -6,7 +6,7 @@ namespace ModernApi.Services;
 /// </summary>
 public sealed class BillingCalculator
 {
-    private const decimal TAX_RATE = 0.05m;
+    public const decimal TAX_RATE = 0.05m;
     private const int AGE_LOADING_THRESHOLD = 60;
     private const decimal LOADING_PERCENT = 0.20m;
 
