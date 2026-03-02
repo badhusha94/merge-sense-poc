@@ -13,9 +13,8 @@ import cosineSimilarity from 'cosine-similarity';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Project policy: any similarity >= 40% should be investigated for duplication.
-// Lowered from 50% to catch semantically disguised duplicates (different names, structure, line count).
-const SIMILARITY_THRESHOLD = 0.40;
+// Project policy: any similarity >= 50% should be investigated for duplication.
+const SIMILARITY_THRESHOLD = 0.50;
 const EMBEDDING_MODEL = 'text-embedding-3-small';
 const CHAT_MODEL = 'gpt-5-mini';
 
@@ -427,7 +426,7 @@ async function aiEnhanceCSharpLearningFinding(finding) {
   const completion = await openai.chat.completions.create({
     model: CHAT_MODEL,
     messages: [{ role: 'user', content: prompt }],
-    max_tokens: 220,
+    max_completion_tokens: 220,
   });
 
   const raw = (completion.choices[0]?.message?.content || '').trim();
@@ -1025,7 +1024,7 @@ async function confirmSameBusinessLogicWithExplanation(methodA, methodB) {
   const completion = await openai.chat.completions.create({
     model: CHAT_MODEL,
     messages: [{ role: 'user', content: prompt }],
-    max_tokens: 400,
+    max_completion_tokens: 400,
     temperature: 0.1,
   });
   const content = (completion.choices[0]?.message?.content || '').trim();
@@ -1048,7 +1047,7 @@ async function checkLogicSafety(oldMethodText, newMethodText) {
   const completion = await openai.chat.completions.create({
     model: CHAT_MODEL,
     messages: [{ role: 'user', content: prompt }],
-    max_tokens: 100,
+    max_completion_tokens: 100,
   });
   const content = (completion.choices[0]?.message?.content || '').trim();
   const first = (content.split('\n')[0] || '').trim().toUpperCase();
@@ -1087,7 +1086,7 @@ function finding(type, severity, title, description, extra = {}) {
 
 async function runSemanticDuplication(prMethods, mainMethods, findings) {
   const mainEmbeddingCache = new Map();
-  const LLM_ONLY_THRESHOLD = 0.30;
+  const LLM_ONLY_THRESHOLD = 0.40;
   const alreadyReported = new Set();
 
   for (const prMethod of prMethods) {
@@ -1226,6 +1225,11 @@ async function runIntraPrSemanticDuplication(prMethods, findings) {
     }
   }
 
+  const embeddings = new Array(prMethods.length);
+  for (let i = 0; i < prMethods.length; i++) {
+    embeddings[i] = await getEmbedding(prMethods[i].text);
+  }
+
   for (let i = 0; i < prMethods.length; i++) {
     const a = prMethods[i];
     for (let j = i + 1; j < prMethods.length; j++) {
@@ -1235,7 +1239,10 @@ async function runIntraPrSemanticDuplication(prMethods, findings) {
       const pairKey = `${a.file}::${a.name}|${b.file}::${b.name}`;
       if (alreadyReported.has(pairKey)) continue;
 
-      console.log(`Intra-PR LLM check: ${a.name} <-> ${b.name}`);
+      const similarity = cosineSimilarity(embeddings[i], embeddings[j]);
+      if (similarity < SIMILARITY_THRESHOLD) continue;
+
+      console.log(`Intra-PR check: ${a.name} <-> ${b.name} (embedding: ${similarity.toFixed(2)})`);
       const { same, explanation } = await confirmSameBusinessLogicWithExplanation(a.text, b.text);
       if (!same) continue;
 
@@ -1256,8 +1263,8 @@ async function runIntraPrSemanticDuplication(prMethods, findings) {
           matchingFile: b.file || '',
           matchingLine: b.line || 0,
           intraPr: true,
-          similarityScore: 0,
-          similarityPercent: 0,
+          similarityScore: Math.round(similarity * 100) / 100,
+          similarityPercent: Math.round(similarity * 100),
           thresholdUsed: SIMILARITY_THRESHOLD,
           thresholdPercent: Math.round(SIMILARITY_THRESHOLD * 100),
           aiExplanation: explanation,
@@ -1265,7 +1272,7 @@ async function runIntraPrSemanticDuplication(prMethods, findings) {
           cursorPrompt,
         }
       ));
-      console.log(`Finding: intra-pr duplicate ${a.name} <-> ${b.name}`);
+      console.log(`Finding: intra-pr duplicate ${a.name} <-> ${b.name} (${similarity.toFixed(2)})`);
     }
   }
 }
@@ -1466,7 +1473,6 @@ async function main() {
 
   if (aiEnabled && prBusinessMethods.length > 0 && coreChecks.includes('semantic-duplication')) {
     await runSemanticDuplication(prBusinessMethods, mainBusinessMethods, findings);
-    await runDeepLlmSemanticDuplication(prBusinessMethods, mainBusinessMethods, findings);
     await runIntraPrSemanticDuplication(prBusinessMethods, findings);
   }
 

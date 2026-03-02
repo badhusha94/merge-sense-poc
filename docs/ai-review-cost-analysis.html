@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Code Review — Cost &amp; Architecture Analysis</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --surface: #1e293b;
+    --surface2: #334155;
+    --border: #475569;
+    --text: #e2e8f0;
+    --text-muted: #94a3b8;
+    --accent: #38bdf8;
+    --green: #4ade80;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --purple: #a78bfa;
+    --orange: #fb923c;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 2rem 3rem;
+  }
+  .header {
+    text-align: center;
+    margin-bottom: 3rem;
+    padding-bottom: 2rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .header h1 {
+    font-size: 2.4rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--accent), var(--purple));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 0.5rem;
+  }
+  .header .subtitle {
+    color: var(--text-muted);
+    font-size: 1.1rem;
+  }
+  .header .badge {
+    display: inline-block;
+    margin-top: 1rem;
+    padding: 0.3rem 1rem;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    background: rgba(56, 189, 248, 0.15);
+    color: var(--accent);
+    border: 1px solid rgba(56, 189, 248, 0.3);
+  }
+
+  .grid { display: grid; gap: 2rem; margin-bottom: 2.5rem; }
+  .grid-2 { grid-template-columns: 1fr 1fr; }
+  .grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .grid-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem;
+  }
+  .card h2 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    color: var(--accent);
+  }
+  .card h3 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin-bottom: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .stat-card {
+    text-align: center;
+    padding: 1.8rem 1rem;
+  }
+  .stat-card .value {
+    font-size: 2.2rem;
+    font-weight: 800;
+    margin-bottom: 0.25rem;
+  }
+  .stat-card .label {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+  }
+  .stat-card .sub {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin-top: 0.3rem;
+    opacity: 0.7;
+  }
+  .green { color: var(--green); }
+  .blue { color: var(--accent); }
+  .yellow { color: var(--yellow); }
+  .purple { color: var(--purple); }
+  .orange { color: var(--orange); }
+  .red { color: var(--red); }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+  }
+  th {
+    text-align: left;
+    padding: 0.6rem 0.8rem;
+    border-bottom: 2px solid var(--border);
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  td {
+    padding: 0.6rem 0.8rem;
+    border-bottom: 1px solid rgba(71, 85, 105, 0.4);
+  }
+  tr:last-child td { border-bottom: none; }
+  .right { text-align: right; }
+  .bold { font-weight: 700; }
+
+  .pipeline {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    margin: 1rem 0;
+  }
+  .pipe-step {
+    flex: 1;
+    padding: 1.2rem 1rem;
+    position: relative;
+    text-align: center;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+  }
+  .pipe-step:first-child { border-radius: 10px 0 0 10px; }
+  .pipe-step:last-child { border-radius: 0 10px 10px 0; }
+  .pipe-step .pipe-title {
+    font-weight: 700;
+    font-size: 0.85rem;
+    margin-bottom: 0.4rem;
+  }
+  .pipe-step .pipe-detail {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+  }
+  .pipe-step .pipe-cost {
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+    font-weight: 700;
+  }
+  .pipe-arrow {
+    display: flex;
+    align-items: center;
+    font-size: 1.4rem;
+    color: var(--accent);
+    padding: 0 0.3rem;
+  }
+
+  .comparison {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 1.5rem;
+    align-items: center;
+  }
+  .comparison .vs {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--accent);
+    text-align: center;
+  }
+  .comparison .side {
+    padding: 1.5rem;
+    border-radius: 10px;
+    text-align: center;
+  }
+  .comparison .before {
+    background: rgba(248, 113, 113, 0.1);
+    border: 1px solid rgba(248, 113, 113, 0.3);
+  }
+  .comparison .after {
+    background: rgba(74, 222, 128, 0.1);
+    border: 1px solid rgba(74, 222, 128, 0.3);
+  }
+  .comparison .side .big {
+    font-size: 2rem;
+    font-weight: 800;
+    margin-bottom: 0.3rem;
+  }
+  .comparison .side .detail {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+
+  .assumptions {
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    margin-top: 0.5rem;
+  }
+  .assumption {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+  .assumption .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .section-title {
+    font-size: 1.3rem;
+    font-weight: 700;
+    margin-bottom: 1.2rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .model-tag {
+    display: inline-block;
+    padding: 0.15rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    font-family: 'Cascadia Code', 'Fira Code', monospace;
+  }
+  .model-tag.embed { background: rgba(167, 139, 250, 0.2); color: var(--purple); }
+  .model-tag.llm { background: rgba(56, 189, 248, 0.2); color: var(--accent); }
+
+  .footer {
+    text-align: center;
+    margin-top: 3rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 0.8rem;
+  }
+
+  .savings-bar {
+    height: 28px;
+    border-radius: 6px;
+    overflow: hidden;
+    display: flex;
+    margin: 0.5rem 0;
+  }
+  .savings-bar .filled {
+    background: linear-gradient(90deg, var(--green), #22d3ee);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--bg);
+  }
+  .savings-bar .empty {
+    background: var(--surface2);
+    flex: 1;
+  }
+
+  @media print {
+    body { background: #fff; color: #1a1a2e; padding: 1rem; }
+    .card { border-color: #ddd; background: #f8f9fa; }
+    .header h1 { -webkit-text-fill-color: #1e40af; }
+    th { color: #555; }
+    td { border-color: #eee; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>MergeSense AI Code Review</h1>
+  <div class="subtitle">Cost Analysis &amp; Architecture Overview</div>
+  <div class="badge">Optimized Pipeline — March 2026</div>
+</div>
+
+<!-- Key Stats -->
+<div class="grid grid-4">
+  <div class="card stat-card">
+    <div class="value green">$0.007</div>
+    <div class="label">Cost per PR</div>
+    <div class="sub">Less than 1 cent</div>
+  </div>
+  <div class="card stat-card">
+    <div class="value blue">$0.07</div>
+    <div class="label">Daily (10 PRs)</div>
+    <div class="sub">7 cents per day</div>
+  </div>
+  <div class="card stat-card">
+    <div class="value purple">$1.54</div>
+    <div class="label">Monthly</div>
+    <div class="sub">22 working days</div>
+  </div>
+  <div class="card stat-card">
+    <div class="value yellow">$18.20</div>
+    <div class="label">Yearly</div>
+    <div class="sub">~2,600 PRs</div>
+  </div>
+</div>
+
+<!-- Assumptions -->
+<div class="card" style="margin-bottom: 2.5rem;">
+  <h3>Estimation Assumptions</h3>
+  <div class="assumptions">
+    <div class="assumption"><span class="dot"></span> 10 PRs per day</div>
+    <div class="assumption"><span class="dot"></span> 5 new methods per PR</div>
+    <div class="assumption"><span class="dot"></span> ≤ 50 lines per method</div>
+    <div class="assumption"><span class="dot"></span> ~13 baseline methods on main</div>
+    <div class="assumption"><span class="dot"></span> 50% similarity threshold</div>
+    <div class="assumption"><span class="dot"></span> ~3 C# learning tips per PR</div>
+  </div>
+</div>
+
+<!-- Pipeline Architecture -->
+<div class="section-title">Review Pipeline Architecture</div>
+
+<div class="pipeline">
+  <div class="pipe-step">
+    <div class="pipe-title">1. Extract Methods</div>
+    <div class="pipe-detail">Parse PR diff + main branch<br>Regex-based C# extraction</div>
+    <div class="pipe-cost" style="color: var(--green);">Free</div>
+  </div>
+  <div class="pipe-arrow">→</div>
+  <div class="pipe-step">
+    <div class="pipe-title">2. Embed</div>
+    <div class="pipe-detail"><span class="model-tag embed">text-embedding-3-small</span><br>18 calls per PR</div>
+    <div class="pipe-cost" style="color: var(--green);">$0.0002</div>
+  </div>
+  <div class="pipe-arrow">→</div>
+  <div class="pipe-step">
+    <div class="pipe-title">3. Filter</div>
+    <div class="pipe-detail">Cosine similarity ≥ 50%<br>~65 pairs → ~5 candidates</div>
+    <div class="pipe-cost" style="color: var(--green);">Free</div>
+  </div>
+  <div class="pipe-arrow">→</div>
+  <div class="pipe-step">
+    <div class="pipe-title">4. LLM Confirm</div>
+    <div class="pipe-detail"><span class="model-tag llm">gpt-5-mini</span><br>~8 LLM calls per PR</div>
+    <div class="pipe-cost" style="color: var(--yellow);">$0.0064</div>
+  </div>
+  <div class="pipe-arrow">→</div>
+  <div class="pipe-step">
+    <div class="pipe-title">5. Post to PR</div>
+    <div class="pipe-detail">Inline comments<br>+ Summary with Cursor prompt</div>
+    <div class="pipe-cost" style="color: var(--green);">Free</div>
+  </div>
+</div>
+
+<!-- Cost Breakdown -->
+<div class="grid grid-2" style="margin-top: 2.5rem;">
+  <div class="card">
+    <h2>Cost Breakdown per PR</h2>
+    <table>
+      <thead>
+        <tr><th>Component</th><th>Model</th><th>Calls</th><th class="right">Cost</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Embeddings (PR methods)</td>
+          <td><span class="model-tag embed">embedding-3-small</span></td>
+          <td>5</td>
+          <td class="right green">$0.00005</td>
+        </tr>
+        <tr>
+          <td>Embeddings (Main methods)</td>
+          <td><span class="model-tag embed">embedding-3-small</span></td>
+          <td>13</td>
+          <td class="right green">$0.00013</td>
+        </tr>
+        <tr>
+          <td>Semantic duplicate confirm</td>
+          <td><span class="model-tag llm">gpt-5-mini</span></td>
+          <td>~4</td>
+          <td class="right yellow">$0.0032</td>
+        </tr>
+        <tr>
+          <td>Intra-PR duplicate confirm</td>
+          <td><span class="model-tag llm">gpt-5-mini</span></td>
+          <td>~1</td>
+          <td class="right yellow">$0.0008</td>
+        </tr>
+        <tr>
+          <td>C# learning tips</td>
+          <td><span class="model-tag llm">gpt-5-mini</span></td>
+          <td>~3</td>
+          <td class="right yellow">$0.0024</td>
+        </tr>
+        <tr class="bold">
+          <td>Total per PR</td>
+          <td></td>
+          <td>~26</td>
+          <td class="right green">$0.007</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Projection at Scale</h2>
+    <table>
+      <thead>
+        <tr><th>Period</th><th>PRs</th><th class="right">Est. Cost</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Per PR</td><td>1</td><td class="right">$0.007</td></tr>
+        <tr><td>Daily</td><td>10</td><td class="right">$0.07</td></tr>
+        <tr><td>Weekly</td><td>50</td><td class="right">$0.35</td></tr>
+        <tr><td>Monthly</td><td>220</td><td class="right">$1.54</td></tr>
+        <tr><td>Quarterly</td><td>660</td><td class="right">$4.62</td></tr>
+        <tr class="bold"><td>Yearly</td><td>2,600</td><td class="right green">$18.20</td></tr>
+      </tbody>
+    </table>
+    <div style="margin-top: 1rem;">
+      <h3>Scaling Scenarios</h3>
+      <table>
+        <thead><tr><th>Team Size</th><th>PRs/Day</th><th class="right">Monthly</th></tr></thead>
+        <tbody>
+          <tr><td>Small (3-5 devs)</td><td>5</td><td class="right">$0.77</td></tr>
+          <tr><td>Medium (8-12 devs)</td><td>10</td><td class="right">$1.54</td></tr>
+          <tr><td>Large (15-25 devs)</td><td>25</td><td class="right">$3.85</td></tr>
+          <tr><td>Enterprise (50+ devs)</td><td>50</td><td class="right">$7.70</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Before/After Optimization -->
+<div class="section-title" style="margin-top: 2.5rem;">Optimization Impact</div>
+
+<div class="card" style="margin-bottom: 2rem;">
+  <h2>Before vs After Optimization</h2>
+  <div class="comparison">
+    <div class="side before">
+      <div class="big red">~195</div>
+      <div class="detail">LLM calls per PR</div>
+      <div style="margin-top: 0.5rem; font-size: 0.85rem; color: var(--red);">
+        gpt-5.2 @ $14/1M output<br>
+        Deep brute-force scan<br>
+        ~$1.00+ per PR
+      </div>
+    </div>
+    <div class="vs">→</div>
+    <div class="side after">
+      <div class="big green">~8</div>
+      <div class="detail">LLM calls per PR</div>
+      <div style="margin-top: 0.5rem; font-size: 0.85rem; color: var(--green);">
+        gpt-5-mini @ $2/1M output<br>
+        Embeddings-first filtering<br>
+        ~$0.007 per PR
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top: 1.5rem;">
+    <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 0.3rem;">
+      <span>Cost Reduction</span>
+      <span class="green bold">99.3% savings</span>
+    </div>
+    <div class="savings-bar">
+      <div class="filled" style="width: 99.3%;">99.3%</div>
+      <div class="empty"></div>
+    </div>
+  </div>
+
+  <div style="margin-top: 1rem;">
+    <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 0.3rem;">
+      <span>LLM Calls Reduction</span>
+      <span class="green bold">96% fewer calls</span>
+    </div>
+    <div class="savings-bar">
+      <div class="filled" style="width: 96%;">96%</div>
+      <div class="empty"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Model Pricing Reference -->
+<div class="card">
+  <h2>OpenAI Model Pricing Reference (March 2026)</h2>
+  <table>
+    <thead>
+      <tr><th>Model</th><th class="right">Input / 1M</th><th class="right">Output / 1M</th><th>Used For</th><th>Status</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="model-tag embed">text-embedding-3-small</span></td>
+        <td class="right">$0.02</td>
+        <td class="right">—</td>
+        <td>Similarity filtering</td>
+        <td class="green bold">Active</td>
+      </tr>
+      <tr>
+        <td><span class="model-tag llm">gpt-5-mini</span></td>
+        <td class="right">$0.25</td>
+        <td class="right">$2.00</td>
+        <td>Semantic confirmation + tips</td>
+        <td class="green bold">Active</td>
+      </tr>
+      <tr style="opacity: 0.5;">
+        <td>gpt-4o-mini</td>
+        <td class="right">$0.15</td>
+        <td class="right">$0.60</td>
+        <td>—</td>
+        <td class="text-muted">Alternative</td>
+      </tr>
+      <tr style="opacity: 0.5;">
+        <td>gpt-4.1-mini</td>
+        <td class="right">$0.40</td>
+        <td class="right">$1.60</td>
+        <td>—</td>
+        <td class="text-muted">Alternative</td>
+      </tr>
+      <tr style="opacity: 0.5;">
+        <td>gpt-4o</td>
+        <td class="right">$2.50</td>
+        <td class="right">$10.00</td>
+        <td>—</td>
+        <td class="text-muted">Expensive</td>
+      </tr>
+      <tr style="opacity: 0.5;">
+        <td>gpt-5.2</td>
+        <td class="right">$1.75</td>
+        <td class="right">$14.00</td>
+        <td>—</td>
+        <td class="red">Previous (costly)</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- What the Review Catches -->
+<div class="card" style="margin-top: 2rem;">
+  <h2>What the AI Review Detects</h2>
+  <div class="grid grid-3" style="gap: 1rem; margin-top: 0.5rem;">
+    <div style="padding: 1rem; background: var(--surface2); border-radius: 8px;">
+      <div style="font-weight: 700; color: var(--red); margin-bottom: 0.3rem;">High Severity</div>
+      <div style="font-size: 0.85rem; color: var(--text-muted);">
+        Semantic duplications<br>
+        Business logic drift<br>
+        Logic safety warnings
+      </div>
+    </div>
+    <div style="padding: 1rem; background: var(--surface2); border-radius: 8px;">
+      <div style="font-weight: 700; color: var(--yellow); margin-bottom: 0.3rem;">Medium Severity</div>
+      <div style="font-size: 0.85rem; color: var(--text-muted);">
+        Duplicate constants<br>
+        DTO shape duplications<br>
+        Project rule violations
+      </div>
+    </div>
+    <div style="padding: 1rem; background: var(--surface2); border-radius: 8px;">
+      <div style="font-weight: 700; color: var(--accent); margin-bottom: 0.3rem;">Coaching</div>
+      <div style="font-size: 0.85rem; color: var(--text-muted);">
+        Modern C# idiom tips<br>
+        Legacy pattern detection<br>
+        One-click Cursor fix prompts
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="footer">
+  MergeSense AI Code Review &mdash; Cost Analysis &mdash; Generated March 2026<br>
+  Prices based on OpenAI API published rates. Actual costs may vary with prompt caching and token counts.
+</div>
+
+</body>
+</html>
