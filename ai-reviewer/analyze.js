@@ -13,10 +13,11 @@ import cosineSimilarity from 'cosine-similarity';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Project policy: any similarity >= 50% should be refactored.
-const SIMILARITY_THRESHOLD = 0.50;
+// Project policy: any similarity >= 40% should be investigated for duplication.
+// Lowered from 50% to catch semantically disguised duplicates (different names, structure, line count).
+const SIMILARITY_THRESHOLD = 0.40;
 const EMBEDDING_MODEL = 'text-embedding-3-small';
-const CHAT_MODEL = 'gpt-4o-mini';
+const CHAT_MODEL = 'gpt-5.2';
 
 const prDiffFile = process.env.PR_DIFF_FILE || 'pr.diff';
 const mainCodeFile = process.env.MAIN_CODE_FILE || 'main_code.cs';
@@ -1024,13 +1025,14 @@ async function confirmSameBusinessLogicWithExplanation(methodA, methodB) {
   const completion = await openai.chat.completions.create({
     model: CHAT_MODEL,
     messages: [{ role: 'user', content: prompt }],
-    max_tokens: 150,
+    max_tokens: 400,
+    temperature: 0.1,
   });
   const content = (completion.choices[0]?.message?.content || '').trim();
   const lines = content.split('\n').map((l) => l.trim()).filter(Boolean);
   const first = (lines[0] || '').toUpperCase();
   const same = first.startsWith('YES');
-  const explanation = lines[1] || (same ? 'Methods implement the same business logic.' : 'Different logic.');
+  const explanation = lines.slice(1).join(' ').trim() || (same ? 'Methods implement the same business logic.' : 'Different logic.');
   return { same, explanation };
 }
 
@@ -1085,9 +1087,13 @@ function finding(type, severity, title, description, extra = {}) {
 
 async function runSemanticDuplication(prMethods, mainMethods, findings) {
   const mainEmbeddingCache = new Map();
+  const LLM_ONLY_THRESHOLD = 0.30;
+  const alreadyReported = new Set();
+
   for (const prMethod of prMethods) {
     const prEmbedding = await getEmbedding(prMethod.text);
-    let best = null;
+    const candidates = [];
+
     for (const mainMethod of mainMethods) {
       let mainEmbedding = mainEmbeddingCache.get(mainMethod.text);
       if (!mainEmbedding) {
@@ -1096,93 +1102,171 @@ async function runSemanticDuplication(prMethods, mainMethods, findings) {
       }
       const similarity = cosineSimilarity(prEmbedding, mainEmbedding);
 
-      if (!best || similarity > best.similarity) best = { mainMethod, similarity };
+      if (similarity >= SIMILARITY_THRESHOLD) {
+        candidates.push({ mainMethod, similarity });
+      } else if (similarity >= LLM_ONLY_THRESHOLD) {
+        candidates.push({ mainMethod, similarity, llmOnly: true });
+      }
     }
 
-    if (!best) continue;
-    if (best.similarity < SIMILARITY_THRESHOLD) continue;
+    candidates.sort((a, b) => b.similarity - a.similarity);
 
-    const { same, explanation } = await confirmSameBusinessLogicWithExplanation(prMethod.text, best.mainMethod.text);
-    if (!same) continue;
+    for (const candidate of candidates) {
+      const pairKey = `${prMethod.file}::${prMethod.name}|${candidate.mainMethod.file}::${candidate.mainMethod.name}`;
+      if (alreadyReported.has(pairKey)) continue;
 
-    const suggestedAction = 'Consider reusing the existing method or moving shared logic to a common service.';
-    const cursorPrompt = `Refactor this method to reuse the existing logic from ${best.mainMethod.name} while preserving current behavior.`;
-    findings.push(finding(
-      'semantic-duplication',
-      'high',
-      'Semantic Duplicate Detected',
-      explanation,
-      {
-        file: prMethod.file || '',
-        line: prMethod.line || 0,
-        method: prMethod.name,
-        matchingMethod: best.mainMethod.name,
-        matchingFile: best.mainMethod.file || '',
-        matchingLine: best.mainMethod.line || 0,
-        similarityScore: Math.round(best.similarity * 100) / 100,
-        similarityPercent: Math.round(best.similarity * 100),
-        thresholdUsed: SIMILARITY_THRESHOLD,
-        thresholdPercent: Math.round(SIMILARITY_THRESHOLD * 100),
-        aiExplanation: explanation,
-        suggestedAction,
-        cursorPrompt,
+      console.log(`Checking pair: ${prMethod.name} <-> ${candidate.mainMethod.name} (embedding similarity: ${candidate.similarity.toFixed(2)}${candidate.llmOnly ? ', LLM-only pass' : ''})`);
+      const { same, explanation } = await confirmSameBusinessLogicWithExplanation(prMethod.text, candidate.mainMethod.text);
+      if (!same) {
+        console.log(`  -> Not a duplicate: ${explanation.slice(0, 100)}`);
+        continue;
       }
-    ));
-    console.log(`Finding: duplicate ${prMethod.name} <-> ${best.mainMethod.name} (${best.similarity.toFixed(2)})`);
+
+      alreadyReported.add(pairKey);
+      const suggestedAction = 'Consider reusing the existing method or moving shared logic to a common service.';
+      const cursorPrompt = `Refactor this method to reuse the existing logic from ${candidate.mainMethod.name} while preserving current behavior.`;
+      findings.push(finding(
+        'semantic-duplication',
+        'high',
+        'Semantic Duplicate Detected',
+        explanation,
+        {
+          file: prMethod.file || '',
+          line: prMethod.line || 0,
+          method: prMethod.name,
+          matchingMethod: candidate.mainMethod.name,
+          matchingFile: candidate.mainMethod.file || '',
+          matchingLine: candidate.mainMethod.line || 0,
+          similarityScore: Math.round(candidate.similarity * 100) / 100,
+          similarityPercent: Math.round(candidate.similarity * 100),
+          thresholdUsed: SIMILARITY_THRESHOLD,
+          thresholdPercent: Math.round(SIMILARITY_THRESHOLD * 100),
+          aiExplanation: explanation,
+          suggestedAction,
+          cursorPrompt,
+        }
+      ));
+      console.log(`Finding: duplicate ${prMethod.name} <-> ${candidate.mainMethod.name} (${candidate.similarity.toFixed(2)})`);
+    }
   }
+}
+
+/**
+ * Deep LLM-only scan: bypasses embeddings entirely.
+ * Embeddings can miss semantically disguised duplicates (different names, structure, variable names).
+ * This pass compares every PR method against every main method using only the LLM.
+ * Skips pairs already reported by the embedding-based pass.
+ */
+async function runDeepLlmSemanticDuplication(prMethods, mainMethods, findings) {
+  const MAX_DEEP_CHECKS = 100;
+  const existingPairs = new Set();
+  for (const f of findings) {
+    if (f.type === 'semantic-duplication') {
+      existingPairs.add(`${f.file}::${f.method}|${f.matchingFile}::${f.matchingMethod}`);
+    }
+  }
+
+  const totalPossible = prMethods.length * mainMethods.length;
+  console.log(`Deep LLM scan: up to ${totalPossible} pairs (capped at ${MAX_DEEP_CHECKS}).`);
+
+  let checked = 0;
+  for (const prMethod of prMethods) {
+    for (const mainMethod of mainMethods) {
+      if (checked >= MAX_DEEP_CHECKS) break;
+      const pairKey = `${prMethod.file}::${prMethod.name}|${mainMethod.file}::${mainMethod.name}`;
+      if (existingPairs.has(pairKey)) continue;
+
+      if (prMethod.name === mainMethod.name && prMethod.file === mainMethod.file) continue;
+
+      checked++;
+      console.log(`Deep LLM check (${checked}): ${prMethod.name} <-> ${mainMethod.name}`);
+
+      const { same, explanation } = await confirmSameBusinessLogicWithExplanation(prMethod.text, mainMethod.text);
+      if (!same) continue;
+
+      existingPairs.add(pairKey);
+      const suggestedAction = 'Consider reusing the existing method or moving shared logic to a common service.';
+      const cursorPrompt = `Refactor this method to reuse the existing logic from ${mainMethod.name} while preserving current behavior.`;
+      findings.push(finding(
+        'semantic-duplication',
+        'high',
+        'Semantic Duplicate Detected (deep analysis)',
+        explanation,
+        {
+          file: prMethod.file || '',
+          line: prMethod.line || 0,
+          method: prMethod.name,
+          matchingMethod: mainMethod.name,
+          matchingFile: mainMethod.file || '',
+          matchingLine: mainMethod.line || 0,
+          similarityScore: 0,
+          similarityPercent: 0,
+          thresholdUsed: SIMILARITY_THRESHOLD,
+          thresholdPercent: Math.round(SIMILARITY_THRESHOLD * 100),
+          aiExplanation: explanation,
+          suggestedAction,
+          cursorPrompt,
+        }
+      ));
+      console.log(`Finding (deep): duplicate ${prMethod.name} <-> ${mainMethod.name}`);
+    }
+    if (checked >= MAX_DEEP_CHECKS) break;
+  }
+  console.log(`Deep LLM scan checked ${checked} pairs.`);
 }
 
 async function runIntraPrSemanticDuplication(prMethods, findings) {
   if (prMethods.length < 2) return;
 
-  const embeddings = new Array(prMethods.length);
-  for (let i = 0; i < prMethods.length; i++) {
-    embeddings[i] = await getEmbedding(prMethods[i].text);
+  const alreadyReported = new Set();
+  for (const f of findings) {
+    if (f.type === 'semantic-duplication' && f.intraPr) {
+      alreadyReported.add(`${f.file}::${f.method}|${f.matchingFile}::${f.matchingMethod}`);
+      alreadyReported.add(`${f.matchingFile}::${f.matchingMethod}|${f.file}::${f.method}`);
+    }
   }
 
   for (let i = 0; i < prMethods.length; i++) {
     const a = prMethods[i];
-    let best = null;
-
     for (let j = i + 1; j < prMethods.length; j++) {
       const b = prMethods[j];
       if (!a?.text || !b?.text) continue;
       if ((a.file || '') === (b.file || '') && (a.name || '') === (b.name || '')) continue;
-      const similarity = cosineSimilarity(embeddings[i], embeddings[j]);
-      if (!best || similarity > best.similarity) best = { b, similarity };
+      const pairKey = `${a.file}::${a.name}|${b.file}::${b.name}`;
+      if (alreadyReported.has(pairKey)) continue;
+
+      console.log(`Intra-PR LLM check: ${a.name} <-> ${b.name}`);
+      const { same, explanation } = await confirmSameBusinessLogicWithExplanation(a.text, b.text);
+      if (!same) continue;
+
+      alreadyReported.add(pairKey);
+      alreadyReported.add(`${b.file}::${b.name}|${a.file}::${a.name}`);
+      const suggestedAction = 'Consolidate duplicated logic: keep one implementation and reuse it from the other call sites.';
+      const cursorPrompt = `Consolidate this logic with ${b.name} (extract shared helper / reuse one method) while preserving behavior.`;
+      findings.push(finding(
+        'semantic-duplication',
+        'high',
+        'Intra-PR Semantic Duplicate Detected',
+        explanation,
+        {
+          file: a.file || '',
+          line: a.line || 0,
+          method: a.name,
+          matchingMethod: b.name,
+          matchingFile: b.file || '',
+          matchingLine: b.line || 0,
+          intraPr: true,
+          similarityScore: 0,
+          similarityPercent: 0,
+          thresholdUsed: SIMILARITY_THRESHOLD,
+          thresholdPercent: Math.round(SIMILARITY_THRESHOLD * 100),
+          aiExplanation: explanation,
+          suggestedAction,
+          cursorPrompt,
+        }
+      ));
+      console.log(`Finding: intra-pr duplicate ${a.name} <-> ${b.name}`);
     }
-
-    if (!best) continue;
-    if (best.similarity < SIMILARITY_THRESHOLD) continue;
-
-    const { same, explanation } = await confirmSameBusinessLogicWithExplanation(a.text, best.b.text);
-    if (!same) continue;
-
-    const suggestedAction = 'Consolidate duplicated logic: keep one implementation and reuse it from the other call sites.';
-    const cursorPrompt = `Consolidate this logic with ${best.b.name} (extract shared helper / reuse one method) while preserving behavior.`;
-    findings.push(finding(
-      'semantic-duplication',
-      'high',
-      'Intra-PR Semantic Duplicate Detected',
-      explanation,
-      {
-        file: a.file || '',
-        line: a.line || 0,
-        method: a.name,
-        matchingMethod: best.b.name,
-        matchingFile: best.b.file || '',
-        matchingLine: best.b.line || 0,
-        intraPr: true,
-        similarityScore: Math.round(best.similarity * 100) / 100,
-        similarityPercent: Math.round(best.similarity * 100),
-        thresholdUsed: SIMILARITY_THRESHOLD,
-        thresholdPercent: Math.round(SIMILARITY_THRESHOLD * 100),
-        aiExplanation: explanation,
-        suggestedAction,
-        cursorPrompt,
-      }
-    ));
-    console.log(`Finding: intra-pr duplicate ${a.name} <-> ${best.b.name} (${best.similarity.toFixed(2)})`);
   }
 }
 
@@ -1372,10 +1456,17 @@ async function main() {
     console.log('No C# methods found in PR diff / code. Skipping AI checks; running deterministic checks only.');
   } else {
     console.log(`PR methods: ${prBusinessMethods.length}, Main methods: ${mainBusinessMethods.length}. Running: ${coreChecks.join(', ')}`);
+    for (const m of prBusinessMethods) {
+      console.log(`  PR method: ${m.name} (${m.file}:${m.line}, ${(m.text || '').split('\n').length} lines)`);
+    }
+    for (const m of mainBusinessMethods) {
+      console.log(`  Main method: ${m.name} (${m.file}:${m.line}, ${(m.text || '').split('\n').length} lines)`);
+    }
   }
 
   if (aiEnabled && prBusinessMethods.length > 0 && coreChecks.includes('semantic-duplication')) {
     await runSemanticDuplication(prBusinessMethods, mainBusinessMethods, findings);
+    await runDeepLlmSemanticDuplication(prBusinessMethods, mainBusinessMethods, findings);
     await runIntraPrSemanticDuplication(prBusinessMethods, findings);
   }
 
