@@ -5,6 +5,7 @@ builder.Services.AddScoped<ModernApi.Services.PremiumService>();
 builder.Services.AddScoped<ModernApi.Services.QuoteService>();
 builder.Services.AddScoped<ModernApi.Services.BillingService>();
 builder.Services.AddScoped<ModernApi.Services.ValidationService>();
+builder.Services.AddScoped<ModernApi.Services.RenewalService>();
 
 var app = builder.Build();
 
