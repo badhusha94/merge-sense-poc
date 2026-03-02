@@ -1,5 +1,3 @@
-# Developer: CodeReviewAgentPOC
-
 param(
   [Parameter(Mandatory = $true)]
   [decimal]$Amount,
