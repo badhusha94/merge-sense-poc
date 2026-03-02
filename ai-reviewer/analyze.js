@@ -427,7 +427,7 @@ async function aiEnhanceCSharpLearningFinding(finding) {
   const completion = await openai.chat.completions.create({
     model: CHAT_MODEL,
     messages: [{ role: 'user', content: prompt }],
-    max_tokens: 220,
+    max_completion_tokens: 220,
   });
 
   const raw = (completion.choices[0]?.message?.content || '').trim();
@@ -1025,7 +1025,7 @@ async function confirmSameBusinessLogicWithExplanation(methodA, methodB) {
   const completion = await openai.chat.completions.create({
     model: CHAT_MODEL,
     messages: [{ role: 'user', content: prompt }],
-    max_tokens: 400,
+    max_completion_tokens: 400,
     temperature: 0.1,
   });
   const content = (completion.choices[0]?.message?.content || '').trim();
@@ -1048,7 +1048,7 @@ async function checkLogicSafety(oldMethodText, newMethodText) {
   const completion = await openai.chat.completions.create({
     model: CHAT_MODEL,
     messages: [{ role: 'user', content: prompt }],
-    max_tokens: 100,
+    max_completion_tokens: 100,
   });
   const content = (completion.choices[0]?.message?.content || '').trim();
   const first = (content.split('\n')[0] || '').trim().toUpperCase();
