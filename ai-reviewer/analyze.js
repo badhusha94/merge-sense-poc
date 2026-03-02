@@ -17,7 +17,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Lowered from 50% to catch semantically disguised duplicates (different names, structure, line count).
 const SIMILARITY_THRESHOLD = 0.40;
 const EMBEDDING_MODEL = 'text-embedding-3-small';
-const CHAT_MODEL = 'gpt-5.2';
+const CHAT_MODEL = 'gpt-5-mini';
 
 const prDiffFile = process.env.PR_DIFF_FILE || 'pr.diff';
 const mainCodeFile = process.env.MAIN_CODE_FILE || 'main_code.cs';
@@ -427,7 +427,7 @@ async function aiEnhanceCSharpLearningFinding(finding) {
   const completion = await openai.chat.completions.create({
     model: CHAT_MODEL,
     messages: [{ role: 'user', content: prompt }],
-    max_completion_tokens: 220,
+    max_tokens: 220,
   });
 
   const raw = (completion.choices[0]?.message?.content || '').trim();
@@ -1025,7 +1025,7 @@ async function confirmSameBusinessLogicWithExplanation(methodA, methodB) {
   const completion = await openai.chat.completions.create({
     model: CHAT_MODEL,
     messages: [{ role: 'user', content: prompt }],
-    max_completion_tokens: 400,
+    max_tokens: 400,
     temperature: 0.1,
   });
   const content = (completion.choices[0]?.message?.content || '').trim();
@@ -1048,7 +1048,7 @@ async function checkLogicSafety(oldMethodText, newMethodText) {
   const completion = await openai.chat.completions.create({
     model: CHAT_MODEL,
     messages: [{ role: 'user', content: prompt }],
-    max_completion_tokens: 100,
+    max_tokens: 100,
   });
   const content = (completion.choices[0]?.message?.content || '').trim();
   const first = (content.split('\n')[0] || '').trim().toUpperCase();
