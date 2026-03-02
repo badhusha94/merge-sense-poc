@@ -937,8 +937,15 @@ function runProjectSpecificChecks(prDiffRaw, findings) {
 
     // 6) API methods must use AuthFilter/Authorize except login (check newly added action methods in controllers)
     if (isController) {
-      const controllerHasAuth =
-        (fullContent && (/\[\s*AuthFilter\s*\]/.test(fullContent) || /\[\s*Authorize\b/.test(fullContent))) || false;
+      // Only treat as class-level auth if the attribute appears BEFORE the class declaration.
+      let controllerHasAuth = false;
+      if (fullContent) {
+        const classMatch = fullContent.match(/\bclass\s+\w+/);
+        if (classMatch) {
+          const beforeClass = fullContent.slice(0, classMatch.index);
+          controllerHasAuth = /\[\s*AuthFilter\s*\]/.test(beforeClass) || /\[\s*Authorize\b/.test(beforeClass);
+        }
+      }
 
       for (let i = 0; i < info.lines.length; i++) {
         const dl = info.lines[i];
