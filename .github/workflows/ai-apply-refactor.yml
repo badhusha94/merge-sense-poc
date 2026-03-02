@@ -47,9 +47,10 @@ jobs:
           git fetch origin main 2>/dev/null || true
           # Always prefer main's workflow/script fixes (PR branches often don't include AI tooling changes),
           # but DO NOT modify the repo working tree (otherwise the bot may commit tooling changes).
-          mkdir -p "$RUNNER_TEMP/ai-reviewer"
-          git show origin/main:ai-reviewer/apply-refactor.js > "$RUNNER_TEMP/ai-reviewer/apply-refactor.js" 2>/dev/null || true
-          test -f "$RUNNER_TEMP/ai-reviewer/apply-refactor.js" || (echo "apply-refactor.js not found on this branch or main" && exit 1)
+          # Keep runtime script under ai-reviewer so Node can resolve ESM deps (openai, etc).
+          mkdir -p "ai-reviewer"
+          git show origin/main:ai-reviewer/apply-refactor.js > "ai-reviewer/.runtime-apply-refactor.js" 2>/dev/null || true
+          test -f "ai-reviewer/.runtime-apply-refactor.js" || (echo "apply-refactor.js not found on this branch or main" && exit 1)
 
       - name: Configure git for push
         run: |
@@ -93,6 +94,7 @@ jobs:
         run: node analyze.js
 
       - name: Apply AI refactor (commit + push)
+        working-directory: ai-reviewer
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -102,7 +104,7 @@ jobs:
           PR_HEAD_REF: ${{ needs.detect.outputs.head_ref }}
           FINDINGS_OUTPUT: ${{ github.workspace }}/findings.json
           PR_DIFF_FILE: ${{ github.workspace }}/pr.diff
-        run: node "$RUNNER_TEMP/ai-reviewer/apply-refactor.js"
+        run: node .runtime-apply-refactor.js
 
       - name: Trigger AI Semantic Review (workflow_dispatch)
         shell: bash
