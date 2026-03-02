@@ -4,7 +4,7 @@ using ModernApi.Services;
 namespace ModernApi.Controllers;
 
 [ApiController]
-[Route("api/premium")]
+[Route("api/v1/premium")]
 public class PremiumController(PremiumCalculator premium) : ControllerBase
 {
     [HttpGet("amount")]
@@ -13,4 +13,3 @@ public class PremiumController(PremiumCalculator premium) : ControllerBase
         return premium.CalculatePremium(age, baseAmount);
     }
 }
-

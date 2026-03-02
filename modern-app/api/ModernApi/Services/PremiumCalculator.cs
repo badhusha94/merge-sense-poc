@@ -7,7 +7,7 @@ namespace ModernApi.Services;
 /// </summary>
 public sealed class PremiumCalculator
 {
-    private const decimal TaxRate = 0.05m;
+    private const decimal TAX_RATE = 0.05m;
     private const int AgeLoadingThreshold = 60;
     private const decimal LoadingPercent = 0.20m;
 
@@ -20,7 +20,7 @@ public sealed class PremiumCalculator
             amount += baseAmount * LoadingPercent;
         }
 
-        amount += amount * TaxRate;
+        amount += amount * TAX_RATE;
         return amount;
     }
 
@@ -30,11 +30,10 @@ public sealed class PremiumCalculator
         const int threshold = 5; // violates ALL_CAPS const rule
         _ = threshold;
 
-        _ = string.Format("Hello {0}", name); // C# tip: interpolation
+        _ = $"Hello {name}"; // C# tip: interpolation
         Console.WriteLine("Debug: " + name); // project-rule: avoid Console; C# tip: interpolation
         _ = DateTime.Now; // project-rule: avoid DateTime.Now
         _ = System.Threading.Tasks.Task.FromResult(123).Result; // project-rule: avoid blocking async
         _ = name!.Length; // project-rule: avoid null-forgiving operator
     }
 }
-
