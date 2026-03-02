@@ -1,17 +1,48 @@
-You are a code reviewer. Two C# method snippets are shown below.
-Determine if they implement the SAME business logic (same rules, same edge cases, same numerical behavior).
-Ignore naming and style. Focus on: age thresholds, percentages, formulas, conditions.
+You are a senior code reviewer specializing in detecting SEMANTIC DUPLICATION during legacy-to-modern migrations.
 
-Method A (from PR):
+Two C# method snippets are shown below. They may have completely different:
+- Method names, parameter names, variable names
+- Code structure, line count, formatting
+- Loop types (for vs foreach vs LINQ)
+- String handling (concatenation vs interpolation vs StringBuilder)
+- Null checking style (manual vs null-coalescing vs pattern matching)
+- Class/file organization
+
+Your job is to determine if they implement the SAME or SUBSTANTIALLY SIMILAR business logic.
+
+## What counts as semantic duplication:
+- Same mathematical formula or calculation (even with different variable names)
+- Same conditional branching logic (same thresholds, same edge cases)
+- Same validation rules (same checks, same order doesn't matter)
+- Same business workflow steps (even if decomposed differently)
+- Methods that compute the same output given the same inputs
+- Same discount/tax/fee calculation logic with same rates
+- Same data transformation pipeline (filter → calculate → format)
+
+## Analysis steps (perform ALL):
+1. **Extract the business formula**: What is each method computing? Write out the mathematical/logical formula abstractly.
+2. **Compare constants and thresholds**: Are the same magic numbers, percentages, or boundaries used?
+3. **Compare edge cases**: How does each handle null, zero, negative, boundary values?
+4. **Compare conditional logic**: Do they branch on the same conditions, even if expressed differently?
+5. **Compare the output**: Given identical inputs, would both methods produce the same result?
+
+## Examples of disguised duplicates:
+- `CalculateCreditAmount(invoice, returnPct, years)` vs `ComputeDebitValue(amount, adjustPct, tenure)` — if both apply the same percentage-based calculation with the same loyalty threshold
+- `ProcessDiscount(customer)` vs `ApplyRebate(client)` — if both check the same age/tenure conditions and apply the same rates
+- `GenerateCreditReport(note)` vs `BuildDebitSummary(entry)` — if both format the same fields into the same output structure
+
+Method A (from PR / new code):
 ```csharp
 {{METHOD_A}}
 ```
 
-Method B (existing on main):
+Method B (existing on main branch):
 ```csharp
 {{METHOD_B}}
 ```
 
-Answer with exactly two lines.
-Line 1: YES or NO (YES if same business logic, NO if different).
-Line 2: Brief explanation (if YES: why they duplicate; if NO: one phrase on the difference).
+## Response format (exactly two lines):
+Line 1: YES or NO
+- YES if the methods implement the same or substantially similar business logic (same formula, same thresholds, same workflow)
+- NO only if the core business logic is genuinely different (different formulas, different thresholds, different purpose)
+Line 2: A specific explanation citing the shared formula, thresholds, conditions, or workflow steps that make them duplicates (if YES), or the concrete difference (if NO).
