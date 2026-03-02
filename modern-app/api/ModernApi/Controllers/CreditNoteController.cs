@@ -5,9 +5,19 @@ using ModernApi.Services;
 namespace ModernApi.Controllers;
 
 [ApiController]
-[Route("api/credit-notes")]
-public class CreditNoteController(CreditNoteService creditNoteService, CreditNoteExportService exportService) : ControllerBase
+[Route("api/v1/credit-notes")]
+[AuthFilter]
+public class CreditNoteController : ControllerBase
 {
+    private readonly CreditNoteService creditNoteService;
+    private readonly CreditNoteExportService exportService;
+
+    public CreditNoteController(CreditNoteService creditNoteService, CreditNoteExportService exportService)
+    {
+        this.creditNoteService = creditNoteService;
+        this.exportService = exportService;
+    }
+
     [HttpGet]
     public ActionResult<List<CreditNoteSummary>> GetAll([FromQuery] CreditNoteStatus? status, [FromQuery] string? customer)
     {
@@ -71,6 +81,7 @@ public class CreditNoteController(CreditNoteService creditNoteService, CreditNot
     }
 
     [HttpPut("{id}")]
+    [AuthFilter]
     public ActionResult<CreditNote> Update(Guid id, [FromBody] UpdateCreditNoteRequest request)
     {
         var updated = creditNoteService.Update(id, request);
@@ -82,6 +93,7 @@ public class CreditNoteController(CreditNoteService creditNoteService, CreditNot
     }
 
     [HttpDelete("{id}")]
+    [AuthFilter]
     public ActionResult Delete(Guid id)
     {
         var deleted = creditNoteService.Delete(id);
@@ -93,6 +105,7 @@ public class CreditNoteController(CreditNoteService creditNoteService, CreditNot
     }
 
     [HttpGet("{id}/calculate")]
+    [AuthFilter]
     public ActionResult<decimal> Calculate(Guid id)
     {
         var note = creditNoteService.GetById(id);
@@ -107,6 +120,7 @@ public class CreditNoteController(CreditNoteService creditNoteService, CreditNot
     }
 
     [HttpGet("export/csv")]
+    [AuthFilter]
     public IActionResult ExportCsv([FromQuery] CreditNoteStatus? status)
     {
         List<CreditNote> notes;
@@ -124,6 +138,7 @@ public class CreditNoteController(CreditNoteService creditNoteService, CreditNot
     }
 
     [HttpGet("export/html")]
+    [AuthFilter]
     public ActionResult<string> ExportHtml([FromQuery] CreditNoteStatus? status)
     {
         List<CreditNote> notes;

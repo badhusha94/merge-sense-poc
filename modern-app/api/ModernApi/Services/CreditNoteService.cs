@@ -10,7 +10,6 @@ namespace ModernApi.Services;
 public class CreditNoteService
 {
     // Redundant constants (duplicated from BillingCalculator, RenewalModule, DiscountModule)
-    private const decimal TAX_RATE = 0.05m;
     private const int LOYALTY_THRESHOLD = 5;
     private const decimal LOYALTY_DISCOUNT = 0.10m;
     private const decimal MAX_CREDIT_PERCENT = 0.50m;
@@ -143,7 +142,7 @@ public class CreditNoteService
 
         decimal creditBase = invoiceAmount * effectiveReturn;
 
-        decimal taxAdjustment = creditBase * TAX_RATE;
+        decimal taxAdjustment = creditBase * BillingCalculator.TAX_RATE;
         creditBase = creditBase - taxAdjustment;
 
         // Drift: uses > instead of >= (carried from BillingCalculator pattern)
