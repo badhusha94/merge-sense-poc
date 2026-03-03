@@ -85,6 +85,40 @@ function extractCSharpMethods(source, filePath = '') {
   return methods;
 }
 
+/**
+ * Extract class-level constants from source so we can resolve them into method bodies.
+ * Returns a Map of constantName -> { type, value, raw }.
+ */
+function extractClassConstants(source) {
+  const constants = new Map();
+  const lines = String(source || '').split('\n');
+  for (const line of lines) {
+    const m = line.match(/\bconst\s+([\w<>\[\], ?]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+)\s*;/);
+    if (!m) continue;
+    constants.set(m[2].trim(), { type: m[1].trim(), value: m[3].trim() });
+  }
+  return constants;
+}
+
+/**
+ * Resolve constant references in method text by substituting their literal values.
+ * Also handles cross-class references like ClassName.CONST by looking them up in allConstants.
+ */
+function resolveConstantsInMethodText(methodText, localConstants, allConstants) {
+  let resolved = methodText;
+  const combined = new Map([...allConstants, ...localConstants]);
+  for (const [name, info] of combined) {
+    const pattern = new RegExp(`\\b(?:[A-Za-z_]\\w*\\.)?${name}\\b`, 'g');
+    resolved = resolved.replace(pattern, (match) => {
+      if (match === name || match.includes('.')) {
+        return `${name}/*=${info.value}*/`;
+      }
+      return match;
+    });
+  }
+  return resolved;
+}
+
 function extractCSharpMethodsFromMainCode(mainCode) {
   const lines = String(mainCode || '').split('\n');
   let currentFile = '';
@@ -1018,6 +1052,22 @@ async function getEmbedding(text) {
   return data[0].embedding;
 }
 
+/**
+ * Batch-embed multiple texts in a single API call.
+ * Returns an array of embeddings in the same order as the input texts.
+ */
+async function getEmbeddingsBatch(texts) {
+  if (!aiEnabled || !openai) throw new Error('OpenAI client not configured');
+  if (texts.length === 0) return [];
+  const truncated = texts.map((t) => String(t).slice(0, 8000));
+  const { data } = await openai.embeddings.create({
+    model: EMBEDDING_MODEL,
+    input: truncated,
+  });
+  const sorted = data.sort((a, b) => a.index - b.index);
+  return sorted.map((d) => d.embedding);
+}
+
 /** Confirm same business logic and get explanation. Returns { same, explanation }. */
 async function confirmSameBusinessLogicWithExplanation(methodA, methodB) {
   if (!aiEnabled || !openai) return { same: false, explanation: 'OpenAI client not configured.' };
@@ -1099,21 +1149,27 @@ function finding(type, severity, title, description, extra = {}) {
 }
 
 async function runSemanticDuplication(prMethods, mainMethods, findings) {
-  const mainEmbeddingCache = new Map();
-  const LLM_ONLY_THRESHOLD = 0.40;
+  const LLM_ONLY_THRESHOLD = 0.48;
   const alreadyReported = new Set();
 
-  for (const prMethod of prMethods) {
-    const prEmbedding = await getEmbedding(prMethod.text);
+  // Batch-embed all methods in two API calls (PR + main) instead of one per method.
+  const allTexts = [
+    ...prMethods.map((m) => m.resolvedText || m.text),
+    ...mainMethods.map((m) => m.resolvedText || m.text),
+  ];
+  console.log(`Batch-embedding ${allTexts.length} methods (${prMethods.length} PR + ${mainMethods.length} main) in one call...`);
+  const allEmbeddings = await getEmbeddingsBatch(allTexts);
+  const prEmbeddings = allEmbeddings.slice(0, prMethods.length);
+  const mainEmbeddings = allEmbeddings.slice(prMethods.length);
+
+  for (let pi = 0; pi < prMethods.length; pi++) {
+    const prMethod = prMethods[pi];
+    const prEmbedding = prEmbeddings[pi];
     const candidates = [];
 
-    for (const mainMethod of mainMethods) {
-      let mainEmbedding = mainEmbeddingCache.get(mainMethod.text);
-      if (!mainEmbedding) {
-        mainEmbedding = await getEmbedding(mainMethod.text);
-        mainEmbeddingCache.set(mainMethod.text, mainEmbedding);
-      }
-      const similarity = cosineSimilarity(prEmbedding, mainEmbedding);
+    for (let mi = 0; mi < mainMethods.length; mi++) {
+      const mainMethod = mainMethods[mi];
+      const similarity = cosineSimilarity(prEmbedding, mainEmbeddings[mi]);
 
       if (similarity >= SIMILARITY_THRESHOLD) {
         candidates.push({ mainMethod, similarity });
@@ -1129,7 +1185,10 @@ async function runSemanticDuplication(prMethods, mainMethods, findings) {
       if (alreadyReported.has(pairKey)) continue;
 
       console.log(`Checking pair: ${prMethod.name} <-> ${candidate.mainMethod.name} (embedding similarity: ${candidate.similarity.toFixed(2)}${candidate.llmOnly ? ', LLM-only pass' : ''})`);
-      const { same, explanation } = await confirmSameBusinessLogicWithExplanation(prMethod.text, candidate.mainMethod.text);
+      const { same, explanation } = await confirmSameBusinessLogicWithExplanation(
+        prMethod.resolvedText || prMethod.text,
+        candidate.mainMethod.resolvedText || candidate.mainMethod.text
+      );
       if (!same) {
         console.log(`  -> Not a duplicate: ${explanation.slice(0, 100)}`);
         continue;
@@ -1194,7 +1253,10 @@ async function runDeepLlmSemanticDuplication(prMethods, mainMethods, findings) {
       checked++;
       console.log(`Deep LLM check (${checked}): ${prMethod.name} <-> ${mainMethod.name}`);
 
-      const { same, explanation } = await confirmSameBusinessLogicWithExplanation(prMethod.text, mainMethod.text);
+      const { same, explanation } = await confirmSameBusinessLogicWithExplanation(
+        prMethod.resolvedText || prMethod.text,
+        mainMethod.resolvedText || mainMethod.text
+      );
       if (!same) continue;
 
       existingPairs.add(pairKey);
@@ -1239,10 +1301,8 @@ async function runIntraPrSemanticDuplication(prMethods, findings) {
     }
   }
 
-  const embeddings = new Array(prMethods.length);
-  for (let i = 0; i < prMethods.length; i++) {
-    embeddings[i] = await getEmbedding(prMethods[i].text);
-  }
+  // Reuse batch embeddings from the main scan if available, otherwise batch here.
+  const embeddings = await getEmbeddingsBatch(prMethods.map((m) => m.resolvedText || m.text));
 
   for (let i = 0; i < prMethods.length; i++) {
     const a = prMethods[i];
@@ -1257,7 +1317,10 @@ async function runIntraPrSemanticDuplication(prMethods, findings) {
       if (similarity < SIMILARITY_THRESHOLD) continue;
 
       console.log(`Intra-PR check: ${a.name} <-> ${b.name} (embedding: ${similarity.toFixed(2)})`);
-      const { same, explanation } = await confirmSameBusinessLogicWithExplanation(a.text, b.text);
+      const { same, explanation } = await confirmSameBusinessLogicWithExplanation(
+        a.resolvedText || a.text,
+        b.resolvedText || b.text
+      );
       if (!same) continue;
 
       alreadyReported.add(pairKey);
@@ -1448,11 +1511,18 @@ async function main() {
   const mainCode = readFileSafe(mainCodeFile);
   const changedFiles = changedCSharpFilesFromDiff(prDiffRaw);
 
+  // Build a global constant map from all C# source files for constant resolution.
+  const allConstants = new Map();
+  const prFileConstants = new Map(); // file -> Map of constants
+
   const prMethods = [];
   for (const f of changedFiles) {
     const abs = path.join(repoRoot, f);
     const src = readFileSafe(abs);
     if (!src) continue;
+    const fileConsts = extractClassConstants(src);
+    prFileConstants.set(f, fileConsts);
+    for (const [k, v] of fileConsts) allConstants.set(k, v);
     prMethods.push(...extractCSharpMethods(src, f));
   }
 
@@ -1463,6 +1533,35 @@ async function main() {
   }
 
   const mainMethods = extractCSharpMethodsFromMainCode(mainCode);
+
+  // Extract constants from main_code.cs (concatenated file with // FILE: markers).
+  {
+    const lines = String(mainCode || '').split('\n');
+    let currentFile = '';
+    let buf = [];
+    const flush = () => {
+      if (buf.length === 0) return;
+      const chunk = buf.join('\n');
+      const consts = extractClassConstants(chunk);
+      for (const [k, v] of consts) allConstants.set(k, v);
+      buf = [];
+    };
+    for (const line of lines) {
+      const m = line.match(/^\s*\/\/\s*FILE:\s*(.+)\s*$/);
+      if (m) { flush(); currentFile = (m[1] || '').trim(); continue; }
+      buf.push(line);
+    }
+    flush();
+  }
+
+  // Attach resolved text (with inlined constant values) to each method for better embedding/LLM comparison.
+  for (const m of prMethods) {
+    const localConsts = prFileConstants.get(m.file) || new Map();
+    m.resolvedText = resolveConstantsInMethodText(m.text, localConsts, allConstants);
+  }
+  for (const m of mainMethods) {
+    m.resolvedText = resolveConstantsInMethodText(m.text, new Map(), allConstants);
+  }
 
   const prBusinessMethods = prMethods.filter(isPrBusinessMethodCandidate);
   const mainBusinessMethods = mainMethods.filter(isMainBusinessMethodCandidate);

@@ -31,6 +31,11 @@ Your job is to determine if they implement the SAME or SUBSTANTIALLY SIMILAR bus
 - `ProcessDiscount(customer)` vs `ApplyRebate(client)` — if both check the same age/tenure conditions and apply the same rates
 - `GenerateCreditReport(note)` vs `BuildDebitSummary(entry)` — if both format the same fields into the same output structure
 
+## IMPORTANT: Constant resolution
+The code below has been pre-processed: constant references are annotated with their resolved values
+using the format `CONSTANT_NAME/*=value*/`. Use these resolved values when comparing formulas.
+Two constants with different names but the SAME resolved value represent the SAME threshold/rate.
+
 Method A (from PR / new code):
 ```csharp
 {{METHOD_A}}
@@ -45,4 +50,4 @@ Method B (existing on main branch):
 Line 1: YES or NO
 - YES if the methods implement the same or substantially similar business logic (same formula, same thresholds, same workflow)
 - NO only if the core business logic is genuinely different (different formulas, different thresholds, different purpose)
-Line 2: A specific explanation citing the shared formula, thresholds, conditions, or workflow steps that make them duplicates (if YES), or the concrete difference (if NO).
+Line 2: A specific explanation citing the shared formula, thresholds, conditions, or workflow steps that make them duplicates (if YES), or the concrete difference (if NO). Reference the actual numeric values when comparing constants.
