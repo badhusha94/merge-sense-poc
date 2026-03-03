@@ -5,7 +5,7 @@ namespace ModernApi.Services;
 /// </summary>
 public class InvoiceAdjustmentService
 {
-    private const decimal CEILING_RATE = 0.50m;
+    private const decimal MAX_CREDIT_PERCENT = 0.50m;
     private const decimal TAX_MULTIPLIER = 0.05m;
     private const int TENURE_CUTOFF = 5;
     private const decimal TENURE_BENEFIT = 0.10m;
@@ -21,8 +21,8 @@ public class InvoiceAdjustmentService
             return 0m;
 
         decimal applicableReduction = reductionPercent;
-        if (applicableReduction > CEILING_RATE)
-            applicableReduction = CEILING_RATE;
+        if (applicableReduction > MAX_CREDIT_PERCENT)
+            applicableReduction = MAX_CREDIT_PERCENT;
 
         decimal netAmount = originalAmount * (1m - applicableReduction);
 
@@ -46,7 +46,7 @@ public class InvoiceAdjustmentService
 
     public string FormatSettlementSummary(string clientName, decimal originalAmount, decimal adjustedTotal)
     {
-        List<string> lines = new List<string>();
+        List<string> lines = new();
 
         lines.Add("=== Invoice Settlement Summary ===");
         lines.Add("Client: " + clientName);
@@ -55,11 +55,7 @@ public class InvoiceAdjustmentService
         lines.Add("Variance: " + (originalAmount - adjustedTotal).ToString("C"));
         lines.Add("Generated: " + DateTime.Now.ToString("dd/MM/yyyy HH:mm"));
 
-        string result = "";
-        for (int i = 0; i < lines.Count; i++)
-        {
-            result = result + lines[i] + "\n";
-        }
+        string result = string.Join("\n", lines);
 
         return result;
     }
