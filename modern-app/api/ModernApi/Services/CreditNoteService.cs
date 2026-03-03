@@ -155,6 +155,35 @@ public class CreditNoteService
         return creditBase;
     }
 
+    public decimal ComputeInvoiceSettlement(decimal grossAmount, decimal discountRate, int customerTenure, bool isOverdue)
+    {
+        if (grossAmount <= 0)
+            return 0m;
+
+        decimal effectiveDiscount = discountRate;
+        if (effectiveDiscount > MAX_CREDIT_PERCENT)
+            effectiveDiscount = MAX_CREDIT_PERCENT;
+
+        decimal subtotal = grossAmount * (1m - effectiveDiscount);
+
+        decimal taxComponent = subtotal * BillingCalculator.TAX_RATE;
+        subtotal = subtotal + taxComponent;
+
+        if (customerTenure > LOYALTY_THRESHOLD)
+        {
+            decimal tenureRebate = subtotal * LOYALTY_DISCOUNT;
+            subtotal = subtotal - tenureRebate;
+        }
+
+        if (isOverdue)
+        {
+            decimal lateFee = subtotal * 0.02m;
+            subtotal = subtotal + lateFee;
+        }
+
+        return Math.Round(subtotal, 2);
+    }
+
     public CreditNoteSummary ToSummary(CreditNote note)
     {
         return new CreditNoteSummary(
