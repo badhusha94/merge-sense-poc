@@ -25,20 +25,16 @@ public class InvoiceAdjustmentService
             applicableReduction = MAX_CREDIT_PERCENT;
 
         decimal netAmount = originalAmount * (1m - applicableReduction);
-
-        decimal taxPortion = netAmount * TAX_MULTIPLIER;
-        netAmount = netAmount + taxPortion;
+        netAmount += netAmount * TAX_MULTIPLIER;
 
         if (yearsAsClient > TENURE_CUTOFF)
         {
-            decimal clientLoyaltyCredit = netAmount * TENURE_BENEFIT;
-            netAmount = netAmount - clientLoyaltyCredit;
+            netAmount -= netAmount * TENURE_BENEFIT;
         }
 
         if (paymentDelayed)
         {
-            decimal overdueCharge = netAmount * OVERDUE_SURCHARGE;
-            netAmount = netAmount + overdueCharge;
+            netAmount += netAmount * OVERDUE_SURCHARGE;
         }
 
         return Math.Round(netAmount, 2);
